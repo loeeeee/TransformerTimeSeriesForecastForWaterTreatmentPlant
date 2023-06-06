@@ -12,3 +12,4 @@ doc
 experiment
 .env
 .venv
+.directory
