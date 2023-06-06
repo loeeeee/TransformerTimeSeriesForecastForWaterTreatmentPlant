@@ -1,0 +1,14 @@
+data_distribution*
+*.csv
+*.xlsx
+.~*
+raw
+processed
+config
+visual
+__pycache__
+model
+doc
+experiment
+.env
+.venv
