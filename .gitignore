@@ -1,15 +1,18 @@
-data_distribution*
+# Data
 *.csv
 *.xlsx
 .~*
-raw
-processed
+data
+
+# User
 config
 visual
 __pycache__
 model
 doc
-experiment
+
+# Environment
 .env
 .venv
 .directory
+.vscode
