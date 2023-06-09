@@ -3,7 +3,6 @@ import settings # Read the config
 import os
 import sys
 import math
-import datetime
 
 from tqdm import tqdm
 from termcolor import colored
@@ -13,10 +12,8 @@ import numpy as np
 import seaborn as sns
 import tabulate as tb
 import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
+
 from sklearn.preprocessing import StandardScaler
-from sklearn.preprocessing import PowerTransformer
-from mpl_toolkits.mplot3d import Axes3D
 
 from helper import console_general_data_info
 
