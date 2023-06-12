@@ -10,6 +10,7 @@ visual
 __pycache__
 model
 doc
+transformer_experiment*
 
 # Environment
 .env

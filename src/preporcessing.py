@@ -5,6 +5,7 @@ import sys
 import math
 
 from tqdm import tqdm
+from typing import Union
 from termcolor import colored
 
 import pandas as pd
@@ -13,7 +14,8 @@ import seaborn as sns
 import tabulate as tb
 import matplotlib.pyplot as plt
 
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, PowerTransformer
+from sklearn.model_selection import train_test_split
 
 from helper import console_general_data_info
 
@@ -21,13 +23,27 @@ INPUT_DATA = sys.argv[1]
 VISUAL_DIR = os.environ["VISUAL_DIR"]
 DATA_DIR = os.environ["DATA_DIR"]
 
+train_test_split_config = {
+    "test_size": 0.1,
+    "random_state": 42,
+    "shuffle": False
+}
+
 print(f"Read from {INPUT_DATA}")
+
+def mkdir_if_not_exist(path: str) -> bool:
+    """
+    Create folder if it does not exist
+    Return if the folder is newly created
+    """
+    if not (isExist := os.path.exists(path)):
+        os.mkdir(path)
+    return not isExist
 
 def visual_data_distribution(saving_dir: str, data: pd.DataFrame) -> None:
     # Data distribution analysis
     data_distribution_dir = f"{VISUAL_DIR}/{saving_dir}"
-    if not os.path.exists(data_distribution_dir):
-        os.mkdir(data_distribution_dir)
+    mkdir_if_not_exist(data_distribution_dir)
     bar = tqdm(total=data.shape[1])
     for index, column in enumerate(data):
         try:
@@ -284,12 +300,39 @@ def normalization_and_scaling(data: pd.DataFrame) -> pd.DataFrame:
     for column in target_columns:
         scaler = StandardScaler()
         scaled_data = scaler.fit_transform(np.reshape(np.array(data[column]), (-1, 1)))
-        # transformer = PowerTransformer(method='yeo-johnson')
-        # mapped_data = transformer.fit_transform(scaled_data)
-        # data[column] = mapped_data
+        transformer = PowerTransformer(method='yeo-johnson')
+        mapped_data = transformer.fit_transform(scaled_data)
+        data[column] = mapped_data
         data[column] = scaled_data
     return data
 
+def save_data_csv(path: str, 
+                  name: str, 
+                  data: pd.DataFrame,
+                  split: bool = True,
+                  **kwarg
+                  ) -> None:
+    print(colored("Saving data", "green"))
+    if not split:
+        # Save
+        save_dir = os.path.join(path, f"{name}.csv")
+        data.to_csv(save_dir)
+    else:
+        # Create folder
+        working_dir = os.path.join(path, name)
+        mkdir_if_not_exist(working_dir)
+        # Split
+        train_data, test_data = train_test_split(data, **kwarg)
+        train_data, val_data = train_test_split(train_data, **kwarg)
+        # Save
+        save_dir_train = os.path.join(working_dir, f"{name}_train.csv")
+        train_data.to_csv(save_dir_train)
+        save_dir_val = os.path.join(working_dir, f"{name}_val.csv")
+        val_data.to_csv(save_dir_val)
+        save_dir_test = os.path.join(working_dir, f"{name}_test.csv")
+        test_data.to_csv(save_dir_test)
+    print()
+    return
 
 def main() -> None:
     # Load csv
@@ -345,8 +388,11 @@ def main() -> None:
     visual_data_distribution("data_distribution_filled", data)
 
     # Saving data
-    print(colored("Saving data", "green"))
-    data.to_csv(f"{DATA_DIR}/processed.csv")
+    save_data_csv(DATA_DIR, 
+                  "processed", 
+                  data, 
+                  split=True, 
+                  **train_test_split_config)
 
     # Normalization and scaling data
     data = normalization_and_scaling(data)
@@ -354,8 +400,11 @@ def main() -> None:
     visual_data_distribution("data_distribution_normed", data)
     
     # Saving data
-    print(colored("Saving data", "green"))
-    data.to_csv(f"{DATA_DIR}/processed_norm.csv")
+    save_data_csv(DATA_DIR,
+                  "processed_norm", 
+                  data, 
+                  split=True, 
+                  **train_test_split_config)
     return
 
 if __name__ == "__main__":
