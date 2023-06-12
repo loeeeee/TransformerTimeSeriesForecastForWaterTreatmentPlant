@@ -188,7 +188,7 @@ class TransformerDataset(torch.utils.data.Dataset):
                  knowledge_length: int,
                  forecast_length: int
                  ) -> None:
-        super.__init__()
+        super().__init__()
         self.src = src
         self.tgt = tgt
         self.knowledge_length = knowledge_length
@@ -344,6 +344,7 @@ def main() -> None:
     val = load_data(INPUT_DATA, "val")
     console_general_data_info(train)
 
+    # Split data
     train_src = train.drop(columns=[
         "line 1 pump speed",
         "line 2 pump speed",
@@ -351,6 +352,10 @@ def main() -> None:
         "PAC pump 2 speed",
     ])
     train_tgt = train["line 1 pump speed"]
+
+    # Convert data to Tensor object
+    train_src = torch.tensor(train_src.values)
+    train_tgt = torch.tensor(train_tgt.values).unsqueeze(1)
 
     # Context based variable
     input_feature_size = train_src.shape[1]
@@ -368,131 +373,13 @@ def main() -> None:
         batch_size
     )
 
-    model = TimeSeriesTransformer(
-        input_feature_size,
-        forecast_feature_size
-    )
-
-    # Hyperparams
-    test_size = 0.1
-    batch_size = 32
-    target_col_name = "line 1 pump speed"
-    timestamp_col = "timestamp"
-
-    # Define input variables 
-    exogenous_vars = [
-        "year",
-        "date_x",
-        "date_y",
-        "time_x",
-        "time_y",
-        "inlet flow",
-        "inlet COD",
-        "inlet ammonia nitrogen",
-        "inlet total nitrogen",
-        "inlet phosphorus",
-        "outlet COD",
-        "outlet ammonia nitrogen",
-        "outlet total nitrogen",
-        "outlet phosphorus",
-        "line 1 nitrate nitrogen",
-        "line 2 nitrate nitrogen",
-        ] # should contain strings. Each string must correspond to a column name
-    input_variables = [target_col_name] + exogenous_vars
-    target_idx = train.columns.get_loc("line 1 pump speed") # index position of target in batched trg_y
-
-    input_size = len(input_variables)
-    print(f"Input feature size is {input_size}\n")
-
-    ## Params
-    dim_val = 512
-    n_heads = 8
-    n_decoder_layers = 4
-    n_encoder_layers = 4
-    dec_seq_len = 92 # length of input given to decoder
-    enc_seq_len = 24 # length of input given to encoder
-    output_sequence_length = 6 # target sequence length. If hourly data and length = 48, you predict 2 days ahead
-    window_size = enc_seq_len + output_sequence_length # used to slice data into sub-sequences
-    step_size = 1 # Step size, i.e. how many time steps does the moving window move at each step
-    in_features_encoder_linear_layer = 2048
-    in_features_decoder_linear_layer = 2048
-    max_seq_len = enc_seq_len
-    batch_first = False
-
-    # Make list of (start_idx, end_idx) pairs that are used to slice the time series sequence into chunkc. 
-    # Should be training data indices only
-    training_indices = utils.get_indices_entire_sequence(
-        data=train, 
-        window_size=window_size, 
-        step_size=step_size)
-    print(colored(f"Example training indices:", "green"))
-    for i in range(10):
-        print(training_indices[i])
-    print()
-
-    # Making instance of custom dataset class
-    training_data = ds.TransformerDataset(
-        data=torch.tensor(train[input_variables].values).float(),
-        indices=training_indices,
-        enc_seq_len=enc_seq_len,
-        dec_seq_len=dec_seq_len,
-        target_seq_len=output_sequence_length
-        )
-
-    # Making dataloader
-    training_data = DataLoader(training_data, batch_size)
-
-    i, batch = next(enumerate(training_data))
-
-    src, trg, trg_y = batch
-    print(colored(f"Example training dataloader:", "green"))
-    print(f"src: {src.shape}\ntrg: {trg.shape}\ntrg_y: {trg_y.shape}")
-    print()
-
-    # Permute from shape [batch size, seq len, num features] to [seq len, batch size, num features]
-    if batch_first == False:
-
-        shape_before = src.shape
-        src = src.permute(1, 0, 2)
-        print("src shape changed from {} to {}".format(shape_before, src.shape))
-
-        shape_before = trg.shape
-        trg = trg.permute(1, 0, 2)
-        print("trg shape changed from {} to {}".format(shape_before, trg.shape))
-
-    model = tst.TimeSeriesTransformer(
-        input_size=len(input_variables),
-        dec_seq_len=enc_seq_len,# HACK
-        batch_first=batch_first,
-        num_predicted_features=1
-        )
-
-    # Make src mask for decoder with size:
-    # [batch_size*n_heads, output_sequence_length, enc_seq_len]
-    src_mask = utils.generate_square_subsequent_mask(
-        dim1=output_sequence_length,
-        dim2=enc_seq_len
-        )
-
-    # Make tgt mask for decoder with size:
-    # [batch_size*n_heads, output_sequence_length, output_sequence_length]
-    tgt_mask = utils.generate_square_subsequent_mask( 
-        dim1=output_sequence_length,
-        dim2=output_sequence_length
-        )
-
-    output = model(
-        src=src,
-        tgt=trg,
-        src_mask=src_mask,
-        tgt_mask=tgt_mask
-        )
-    
-    raise Exception
     # Model
     device = get_best_device()
     print(colored(f"Using {device} for training", "black", "on_green"), "\n")
-    model = FeedForwardNeuralNetwork(X_train.shape[1]).to(device)
+    model = TimeSeriesTransformer(
+        input_feature_size,
+        forecast_feature_size
+    ).to(device)
     print(colored("Model structure:", "black", "on_green"), "\n")
     print(model)
 
