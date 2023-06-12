@@ -241,7 +241,8 @@ def create_more_data(data: pd.DataFrame) -> pd.DataFrame:
     data["year"] = [pd.to_datetime(d).year for d in data.loc[:, "timestamp"].values.astype(np.datetime64)]
     data["date"] = [pd.to_datetime(d).date() for d in data.loc[:, "timestamp"].values.astype(np.datetime64)]
     data["time"] = [pd.to_datetime(d).time() for d in data.loc[:, "timestamp"].values.astype(np.datetime64)]
-    data = data.drop(columns=["timestamp"])
+    # data = data.drop(columns=["timestamp"])
+    data = data.set_index("timestamp")
 
     # Convert abs time to rel time
     ## Year
