@@ -1,5 +1,6 @@
 import settings # Get config
 import utils
+import inference
 
 import dataset as ds
 from helper import console_general_data_info, split_data
@@ -108,7 +109,12 @@ class TimeSeriesTransformer(nn.Module):
         )
 
         # Positional encoding layer after the encoder input
-        self.positional_encoder_layer = PositionalEncoding(
+        self.encoder_positional_encoder_layer = PositionalEncoding(
+            d_model         = embedding_dimension
+        )
+
+        # Positional encoding layer after the decoder input
+        self.decoder_positional_encoder_layer = PositionalEncoding(
             d_model         = embedding_dimension
         )
 
@@ -118,14 +124,14 @@ class TimeSeriesTransformer(nn.Module):
             nhead           = multi_head_attention_head_size,
         )
         encoder_norm_layer = nn.BatchNorm1d(
-            num_features    = embedding_dimension,
+            num_features    = embedding_dimension, # TODO
         )
 
         # Build encoder with the encoder layers
         self.encoder = nn.TransformerEncoder(
             encoder_layer   = example_encoder,
             num_layers      = num_of_encoder_layers,
-            norm            = encoder_norm_layer
+            norm            = None
         )
 
         # Example decoder layer to pass into nn.TransformerDecoder
@@ -138,10 +144,10 @@ class TimeSeriesTransformer(nn.Module):
         )
 
         # Build decoder with the decoder layers
-        self.decoder = nn.TransformerEncoder(
-            encoder_layer   = example_decoder,
+        self.decoder = nn.TransformerDecoder(
+            decoder_layer   = example_decoder,
             num_layers      = num_of_decoder_layers,
-            norm            = decoder_norm_layer
+            norm            = None
         )
     
     def forward(self, 
@@ -153,14 +159,17 @@ class TimeSeriesTransformer(nn.Module):
         # Before encoder
         src = self.encoder_input_layer(src)
 
-        # Positional encoding layer
-        src = self.positional_encoder_layer(src)
+        # Encoder positional encoding layer
+        src = self.encoder_positional_encoder_layer(src)
 
         # Encoder
         src = self.encoder(src)
 
         # Before decoder
         tgt = self.decoder_input_layer(tgt)
+
+        # Decoder positional encoding layer
+        tgt = self.decoder_positional_encoder_layer(tgt)
 
         # Decoder
         combined = self.decoder(
@@ -196,15 +205,15 @@ class TransformerDataset(torch.utils.data.Dataset):
         return
     
     def __len__(self) -> int:
-        return self.src.shape[0] + 1 - self.forecast_length
-
+        return (self.src.shape[0] - self.forecast_length - self.knowledge_length)
+    
     def __getitem__(self, knowledge_start: int) -> Tuple[torch.tensor, torch.tensor, torch.tensor]:
         """
         Here is what the src would look like:
 
         src = [xt-4, xt-3, xt-2, xt-1, xt]
 
-        where x denotes the series we’re dealing with, e.g. electricity prices.
+        where x denotes the series we're dealing with, e.g. electricity prices.
 
         The objective is to predict tgt_y which would be:
 
@@ -219,9 +228,14 @@ class TransformerDataset(torch.utils.data.Dataset):
         result_tgt = self.tgt[knowledge_start + self.knowledge_length - 1: 
                               knowledge_start + self.knowledge_length - 1 + self.forecast_length]
         result_tgt_y = self.tgt[knowledge_start + self.knowledge_length: 
-                                knowledge_start + self.knowledge_length + self.forecast_length]
+                                knowledge_start + self.knowledge_length + self.forecast_length]      
         return result_src, result_tgt, result_tgt_y
-    
+
+"""
+class TransformerSampler(torch.utils.data.SequentialSampler):
+    def __init__(self, data: pd.DataFrame) -> None:
+        super().__init__(data)
+"""
 
 # Subprocess
 
@@ -243,6 +257,151 @@ def train(dataloader: DataLoader, model: nn.Module, loss_fn, optimizer: torch.op
         if batch % 100 == 0:
             loss, current = loss.item(), (batch + 1) * len(X)
             tqdm.write(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+
+def train_test(dataloader: DataLoader,
+               model: TimeSeriesTransformer,
+               loss_fn: any,
+               optimizer: torch.optim,
+               device: str,
+               forecast_length: int,
+               knowledge_length: int) -> None:
+    tqdm.write(f"Length of the dataloader: {len(dataloader)}")
+    bar = tqdm(total=len(dataloader), position=1)
+    for i, (src, tgt, tgt_y) in enumerate(dataloader):
+        # """
+        tqdm.write(colored(i, "green", "on_red"))
+        tqdm.write(f"src shape: {src.shape}\ntgt shape: {tgt.shape}\ntgt_y shape: {tgt_y.shape}")
+        # """
+        # Generate masks
+        tgt_mask = utils.generate_square_subsequent_mask(
+            dim1=forecast_length,
+            dim2=forecast_length
+            )
+        src_mask = utils.generate_square_subsequent_mask(
+            dim1=forecast_length,
+            dim2=knowledge_length
+            )
+        tqdm.write(f"tgt_mask shape: {tgt_mask.shape}\nsrc_mask: {src_mask.shape}\n")
+        bar.update()
+    bar.close()
+    return
+
+def train_time_series_transformer(dataloader: DataLoader,
+                                  model: TimeSeriesTransformer,
+                                  loss_fn: any,
+                                  optimizer: torch.optim,
+                                  device: str,
+                                  forecast_length: int,
+                                  knowledge_length: int) -> None:
+    # Start training
+    model.train()
+    
+    bar = tqdm(total=len(dataloader), position=0)
+    total_loss = 0
+    for i, (src, tgt, tgt_y) in enumerate(dataloader):
+        src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
+        tqdm.write(f"src shape: {src.shape}\ntgt shape: {tgt.shape}\ntgt_y shape: {tgt_y.shape}")
+        if i >= 75:
+            tqdm.write(str(i))
+            for j in src:
+                tqdm.write(str(j.shape))
+
+        # """
+        # shape_before = src.shape
+        src = src.permute(1, 0, 2)
+        # tqdm.write("src shape changed from {} to {}".format(shape_before, src.shape))
+    
+        # shape_before = tgt.shape
+        tgt = tgt.permute(1, 0, 2)
+        # tqdm.write("tgt shape changed from {} to {}".format(shape_before, tgt.shape))
+
+        # shape_before = tgt_y.shape
+        tgt_y = tgt_y.permute(1, 0, 2)
+        # tqdm.write("tgt_y shape changed from {} to {}".format(shape_before, tgt_y.shape))
+        # """
+        # zero the parameter gradients
+        optimizer.zero_grad()
+        
+        # Generate masks
+        tgt_mask = utils.generate_square_subsequent_mask(
+            dim1=forecast_length,
+            dim2=forecast_length
+            )
+        src_mask = utils.generate_square_subsequent_mask(
+            dim1=forecast_length,
+            dim2=knowledge_length
+            )
+        # tqdm.write(f"tgt_mask shape: {tgt_mask.shape}\nsrc_mask: {src_mask.shape}\n")
+
+        # Make forecasts
+        prediction = model(src, tgt, src_mask, tgt_mask)
+
+        # Compute and backprop loss
+        # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {prediction.shape}\n")
+        loss = loss_fn(tgt_y, prediction)
+        total_loss += loss
+        loss.backward()
+
+        # Take optimizer step
+        optimizer.step()
+
+        bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(i+1)):.3f}", refresh=True)
+        bar.update()
+    bar.close()
+    return
+
+def val_time_series_transformer(dataloader: DataLoader,
+                                model: nn.Module,
+                                loss_fn: any,
+                                device: str,
+                                forecast_length: int,
+                                knowledge_length: int,
+                                metrics: list) -> None:
+    num_batches = len(dataloader)
+    size = len(dataloader.dataset)
+    # Start evaluation
+    model.eval()
+
+    additional_loss = {}
+    for additional_monitor in metrics:
+        additional_loss[str(type(additional_monitor))] = 0
+
+    with torch.no_grad():
+        test_loss = 0
+        correct = 0
+        bar = tqdm(total=len(dataloader), position=0)
+        for i, (src, tgt, tgt_y) in enumerate(dataloader):
+            src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
+            
+            src = src.permute(1, 0, 2)
+            tgt = tgt.permute(1, 0, 2)
+            tgt_y = tgt_y.permute(1, 0, 2)
+
+            pred = inference.run_encoder_decoder_inference(
+               model, 
+               src, 
+               forecast_length,
+               src.shape[1],
+               device
+               )
+            
+            test_loss += loss_fn(pred, tgt_y).item()
+            # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {pred.shape}\n")
+            correct += (pred == tgt_y).type(torch.float).sum().item()
+            for additional_monitor in metrics:
+                additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
+            bar.update()
+            bar.set_description(desc=f"Loss: {(test_loss/(1+i)):.3f}", refresh=True)
+        bar.close()
+    test_loss /= num_batches
+    correct /= size
+    tqdm.write(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} ")
+    for additional_monitor in metrics:
+        name = str(type(additional_monitor))[8:-2].split(".")[-1]
+        loss = additional_loss[str(type(additional_monitor))] / num_batches
+        tqdm.write(f" {name}: {loss:>8f}")
+    tqdm.write("\n")
+    return test_loss
 
 def val(dataloader, model, loss_fn, device, metrics: list):
     size = len(dataloader.dataset)
@@ -308,6 +467,21 @@ def load_data(path, name) -> pd.DataFrame:
 
     return data
 
+def transformer_collate_fn(data):
+    """
+    print(colored(len(data), "green"))
+    print(colored(len(data[0]), "green"))
+    print(colored(len(data[0][0]), "green"))
+    print(colored(len(data[0][1]), "green"))
+    print(colored(len(data[0][2]), "green"))
+    """
+    src_shape = len(data[0])
+    result = [[], [], []]
+    for i in range(3):
+        result[i] = [torch.Tensor(temp[i]) for temp in data]
+        result[i] = torch.stack(result[i])
+
+    return result[0], result[1], result[2]
 """
 year                          int8
 date_x                     float32
@@ -335,7 +509,7 @@ def main() -> None:
     # HYPERPARAMETER
     knowledge_length    = 18    # 3 hours
     forecast_length     = 6     # 1 hour
-    batch_size          = 32    # 32 is pretty small
+    batch_size          = 128    # 32 is pretty small
 
     # path = "/".join(INPUT_DATA.split('/')[:-1])
     # name = INPUT_DATA.split('/')[-1].split(".")[0]
@@ -343,6 +517,8 @@ def main() -> None:
     train = load_data(INPUT_DATA, "train")
     val = load_data(INPUT_DATA, "val")
     console_general_data_info(train)
+
+    train = train.head(10000) # HACK Out of memory
 
     # Split data
     train_src = train.drop(columns=[
@@ -352,10 +528,19 @@ def main() -> None:
         "PAC pump 2 speed",
     ])
     train_tgt = train["line 1 pump speed"]
+    val_src = val.drop(columns=[
+        "line 1 pump speed",
+        "line 2 pump speed",
+        "PAC pump 1 speed",
+        "PAC pump 2 speed",
+    ])
+    val_tgt = val["line 1 pump speed"]
 
     # Convert data to Tensor object
     train_src = torch.tensor(train_src.values)
     train_tgt = torch.tensor(train_tgt.values).unsqueeze(1)
+    val_src = torch.tensor(val_src.values)
+    val_tgt = torch.tensor(val_tgt.values).unsqueeze(1)
 
     # Context based variable
     input_feature_size = train_src.shape[1]
@@ -367,10 +552,23 @@ def main() -> None:
         knowledge_length,
         forecast_length
         )
+    val_dataset = TransformerDataset(
+        val_src,
+        val_tgt,
+        knowledge_length,
+        forecast_length
+    )
     
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
-        batch_size
+        batch_size,
+        drop_last=True,
+        collate_fn=transformer_collate_fn
+    )
+    val_loader = torch.utils.data.DataLoader(
+        val_dataset,
+        batch_size,
+        drop_last=True
     )
 
     # Model
@@ -394,12 +592,39 @@ def main() -> None:
     t_epoch = TrackerEpoch(500)
     t_loss = TrackerLoss(5, model)
     print(colored("Training:", "black", "on_green"), "\n")
-    with tqdm(total=t_epoch.max_epoch, unit="epoch") as bar:
+    with tqdm(total=t_epoch.max_epoch, unit="epoch", position=1) as bar:
         while True:
             tqdm.write(colored(f"Epoch {t_epoch.epoch()}", "green"))
             tqdm.write("-------------------------------")
-            train(train_loader, model, loss_fn, optimizer, device)
-            loss = val(val_loader, model, loss_fn, device, metrics)
+            """
+            train_test(
+                train_loader, 
+                model, 
+                loss_fn, 
+                optimizer, 
+                device,
+                forecast_length,
+                knowledge_length
+                )
+            break
+            """
+            train_time_series_transformer(
+                train_loader, 
+                model, 
+                loss_fn, 
+                optimizer, 
+                device,
+                forecast_length,
+                knowledge_length
+                )
+            loss = val_time_series_transformer(
+                val_loader, 
+                model, 
+                loss_fn, 
+                device,
+                forecast_length,
+                knowledge_length, 
+                metrics)
             if not t_loss.check(loss, model):
                 tqdm.write(colored("Loss no longer decrease, finish training", "green", "on_red"))
                 break
@@ -424,12 +649,6 @@ def main() -> None:
     model_saving_dir = os.path.join(root_saving_dir, MODEL_NAME)
     print(f"Save data to {model_saving_dir}")
     torch.save(model.state_dict(), model_saving_dir)
-    
-    # Save unused test data as csv
-    csv_saving_dir = os.path.join(root_saving_dir, f"{MODEL_NAME}_X_test.csv") 
-    X_test.to_csv(path_or_buf = csv_saving_dir)
-    csv_saving_dir = os.path.join(root_saving_dir, f"{MODEL_NAME}_y_test.csv") 
-    y_test.to_csv(path_or_buf = csv_saving_dir)
 
     # Visualize training process
     loss_history = t_loss.get_loss_history()
