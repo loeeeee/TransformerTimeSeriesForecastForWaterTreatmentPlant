@@ -300,25 +300,7 @@ def train_time_series_transformer(dataloader: DataLoader,
     total_loss = 0
     for i, (src, tgt, tgt_y) in enumerate(dataloader):
         src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
-        tqdm.write(f"src shape: {src.shape}\ntgt shape: {tgt.shape}\ntgt_y shape: {tgt_y.shape}")
-        if i >= 75:
-            tqdm.write(str(i))
-            for j in src:
-                tqdm.write(str(j.shape))
 
-        # """
-        # shape_before = src.shape
-        src = src.permute(1, 0, 2)
-        # tqdm.write("src shape changed from {} to {}".format(shape_before, src.shape))
-    
-        # shape_before = tgt.shape
-        tgt = tgt.permute(1, 0, 2)
-        # tqdm.write("tgt shape changed from {} to {}".format(shape_before, tgt.shape))
-
-        # shape_before = tgt_y.shape
-        tgt_y = tgt_y.permute(1, 0, 2)
-        # tqdm.write("tgt_y shape changed from {} to {}".format(shape_before, tgt_y.shape))
-        # """
         # zero the parameter gradients
         optimizer.zero_grad()
         
@@ -372,11 +354,7 @@ def val_time_series_transformer(dataloader: DataLoader,
         bar = tqdm(total=len(dataloader), position=0)
         for i, (src, tgt, tgt_y) in enumerate(dataloader):
             src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
-            
-            src = src.permute(1, 0, 2)
-            tgt = tgt.permute(1, 0, 2)
-            tgt_y = tgt_y.permute(1, 0, 2)
-
+            # tqdm.write(f"{src.shape}, {tgt.shape}, {tgt_y.shape}")
             pred = inference.run_encoder_decoder_inference(
                model, 
                src, 
@@ -385,8 +363,8 @@ def val_time_series_transformer(dataloader: DataLoader,
                device
                )
             
-            test_loss += loss_fn(pred, tgt_y).item()
             # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {pred.shape}\n")
+            test_loss += loss_fn(pred, tgt_y).item()
             correct += (pred == tgt_y).type(torch.float).sum().item()
             for additional_monitor in metrics:
                 additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
@@ -469,19 +447,15 @@ def load_data(path, name) -> pd.DataFrame:
 
 def transformer_collate_fn(data):
     """
-    print(colored(len(data), "green"))
-    print(colored(len(data[0]), "green"))
-    print(colored(len(data[0][0]), "green"))
-    print(colored(len(data[0][1]), "green"))
-    print(colored(len(data[0][2]), "green"))
+    src, tgt, tgt_y
     """
-    src_shape = len(data[0])
     result = [[], [], []]
     for i in range(3):
         result[i] = [torch.Tensor(temp[i]) for temp in data]
         result[i] = torch.stack(result[i])
-
+        result[i] = result[i].permute(1, 0, 2)
     return result[0], result[1], result[2]
+
 """
 year                          int8
 date_x                     float32
@@ -519,6 +493,7 @@ def main() -> None:
     console_general_data_info(train)
 
     train = train.head(10000) # HACK Out of memory
+    val = val.head(500)
 
     # Split data
     train_src = train.drop(columns=[
@@ -568,7 +543,8 @@ def main() -> None:
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
         batch_size,
-        drop_last=True
+        drop_last=True,
+        collate_fn=transformer_collate_fn
     )
 
     # Model
@@ -629,7 +605,7 @@ def main() -> None:
                 tqdm.write(colored("Loss no longer decrease, finish training", "green", "on_red"))
                 break
             if not t_epoch.check():
-                tqdm.write(colored("Maximam epoch reached. Finish training", "green", "on_red"))
+                tqdm.write(colored("Maximum epoch reached. Finish training", "green", "on_red"))
                 break
             bar.update()
         bar.close()
