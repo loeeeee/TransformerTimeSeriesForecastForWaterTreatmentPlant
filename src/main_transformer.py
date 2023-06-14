@@ -1,5 +1,5 @@
 import settings # Get config
-import utils
+import utils # TODO: recode this
 import inference # TODO: recode this
 
 from helper import console_general_data_info
@@ -66,101 +66,6 @@ def train_test(dataloader: DataLoader,
     bar.close()
     return
 
-def train_time_series_transformer(dataloader: DataLoader,
-                                  model: TimeSeriesTransformer,
-                                  loss_fn: any,
-                                  optimizer: torch.optim,
-                                  device: str,
-                                  forecast_length: int,
-                                  knowledge_length: int) -> None:
-    # Start training
-    model.train()
-    
-    bar = tqdm(total=len(dataloader), position=0)
-    total_loss = 0
-    for i, (src, tgt, tgt_y) in enumerate(dataloader):
-        src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
-
-        # zero the parameter gradients
-        optimizer.zero_grad()
-        
-        # Generate masks
-        tgt_mask = utils.generate_square_subsequent_mask(
-            dim1=forecast_length,
-            dim2=forecast_length
-            )
-        src_mask = utils.generate_square_subsequent_mask(
-            dim1=forecast_length,
-            dim2=knowledge_length
-            )
-        # tqdm.write(f"tgt_mask shape: {tgt_mask.shape}\nsrc_mask: {src_mask.shape}\n")
-
-        # Make forecasts
-        prediction = model(src, tgt, src_mask, tgt_mask)
-
-        # Compute and backprop loss
-        # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {prediction.shape}\n")
-        loss = loss_fn(tgt_y, prediction)
-        total_loss += loss
-        loss.backward()
-
-        # Take optimizer step
-        optimizer.step()
-
-        bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(i+1)):.3f}", refresh=True)
-        bar.update()
-    bar.close()
-    return
-
-def val_time_series_transformer(dataloader: DataLoader,
-                                model: nn.Module,
-                                loss_fn: any,
-                                device: str,
-                                forecast_length: int,
-                                knowledge_length: int,
-                                metrics: list) -> None:
-    num_batches = len(dataloader)
-    size = len(dataloader.dataset)
-    # Start evaluation
-    model.eval()
-
-    additional_loss = {}
-    for additional_monitor in metrics:
-        additional_loss[str(type(additional_monitor))] = 0
-
-    with torch.no_grad():
-        test_loss = 0
-        correct = 0
-        bar = tqdm(total=len(dataloader), position=0)
-        for i, (src, tgt, tgt_y) in enumerate(dataloader):
-            src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
-            # tqdm.write(f"{src.shape}, {tgt.shape}, {tgt_y.shape}")
-            pred = inference.run_encoder_decoder_inference(
-               model, 
-               src, 
-               forecast_length,
-               src.shape[1],
-               device
-               )
-            
-            # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {pred.shape}\n")
-            test_loss += loss_fn(pred, tgt_y).item()
-            correct += (pred == tgt_y).type(torch.float).sum().item()
-            for additional_monitor in metrics:
-                additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
-            bar.update()
-            bar.set_description(desc=f"Loss: {(test_loss/(1+i)):.3f}", refresh=True)
-        bar.close()
-    test_loss /= num_batches
-    correct /= size
-    tqdm.write(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} ")
-    for additional_monitor in metrics:
-        name = str(type(additional_monitor))[8:-2].split(".")[-1]
-        loss = additional_loss[str(type(additional_monitor))] / num_batches
-        tqdm.write(f" {name}: {loss:>8f}")
-    tqdm.write("\n")
-    return test_loss
-
 def load_data(path, name) -> pd.DataFrame:
     """
     Load data, return a DataFrame
@@ -198,6 +103,35 @@ def load_data(path, name) -> pd.DataFrame:
 
     return data
 
+def save_model(model: nn.Module, save_dir: str, model_name: str) -> None:
+    # Save the models
+    ## Create a sub folder
+    root_saving_dir = os.path.join(save_dir, model_name)
+    if not os.path.exists(root_saving_dir):
+        os.mkdir(root_saving_dir)
+
+    model_saving_dir = os.path.join(root_saving_dir, model_name)
+    print(f"Save data to {model_saving_dir}")
+    torch.save(model.state_dict(), model_saving_dir)
+    return
+
+def visualize_val_loss(t_loss: TrackerLoss, save_dir: str, model_name: str) -> None:
+    ## Create a sub folder
+    root_saving_dir = os.path.join(save_dir, model_name)
+    if not os.path.exists(root_saving_dir):
+        os.mkdir(root_saving_dir)
+
+    # Visualize training process
+    loss_history = t_loss.get_loss_history()
+    fig_name = f"{MODEL_NAME}_loss_history"
+    plt.plot(range(len(loss_history)), loss_history)
+    plt.title(fig_name)
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss (MSE)")
+    plt.figtext(0, 0, f"Minimum loss: {t_loss.lowest_loss}", color="#a41095")
+    plt.savefig(os.path.join(root_saving_dir, f"{fig_name}.png"), dpi=300)
+    return
+
 """
 year                          int8
 date_x                     float32
@@ -223,7 +157,7 @@ PAC pump 2 speed           float32
 
 def main() -> None:
     # HYPERPARAMETER
-    knowledge_length    = 18    # 3 hours
+    knowledge_length    = 24    # 3 hours
     forecast_length     = 6     # 1 hour
     batch_size          = 128    # 32 is pretty small
 
@@ -235,7 +169,7 @@ def main() -> None:
     console_general_data_info(train)
 
     train = train.head(10000) # HACK Out of memory
-    val = val.head(500)
+    val = val.head(1000)
 
     # Split data
     train_src = train.drop(columns=[
@@ -306,50 +240,60 @@ def main() -> None:
     mae = nn.L1Loss()
     metrics.append(mae)
     ## Optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    t_epoch = TrackerEpoch(500)
+    lr = 0.001  # learning rate
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.98)
+    # optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    t_epoch = TrackerEpoch(50)
     t_loss = TrackerLoss(5, model)
     print(colored("Training:", "black", "on_green"), "\n")
     with tqdm(total=t_epoch.max_epoch, unit="epoch", position=1) as bar:
         while True:
-            tqdm.write(colored(f"Epoch {t_epoch.epoch()}", "green"))
-            tqdm.write("-------------------------------")
-            """
-            train_test(
-                train_loader, 
-                model, 
-                loss_fn, 
-                optimizer, 
-                device,
-                forecast_length,
-                knowledge_length
-                )
-            break
-            """
-            train_time_series_transformer(
-                train_loader, 
-                model, 
-                loss_fn, 
-                optimizer, 
-                device,
-                forecast_length,
-                knowledge_length
-                )
-            loss = val_time_series_transformer(
-                val_loader, 
-                model, 
-                loss_fn, 
-                device,
-                forecast_length,
-                knowledge_length, 
-                metrics)
-            if not t_loss.check(loss, model):
-                tqdm.write(colored("Loss no longer decrease, finish training", "green", "on_red"))
+            try:
+                lr = scheduler.get_last_lr()[0]
+                tqdm.write("----------------------------------")
+                tqdm.write(colored(f"Epoch {t_epoch.epoch()}", "green"))
+                tqdm.write(colored(f"Learning rate {lr}", "green"))
+                tqdm.write("----------------------------------")
+                """
+                train_test(
+                    train_loader, 
+                    model, 
+                    loss_fn, 
+                    optimizer, 
+                    device,
+                    forecast_length,
+                    knowledge_length
+                    )
                 break
-            if not t_epoch.check():
-                tqdm.write(colored("Maximum epoch reached. Finish training", "green", "on_red"))
-                break
-            bar.update()
+                """
+                model.learn(
+                    train_loader, 
+                    loss_fn, 
+                    optimizer, 
+                    device,
+                    forecast_length,
+                    knowledge_length
+                )
+                loss = model.val(
+                    val_loader, 
+                    loss_fn, 
+                    device,
+                    forecast_length,
+                    knowledge_length, 
+                    metrics)
+
+                scheduler.step()
+
+                if not t_loss.check(loss, model):
+                    tqdm.write(colored("Loss no longer decrease, finish training", "green", "on_red"))
+                    break
+                if not t_epoch.check():
+                    tqdm.write(colored("Maximum epoch reached. Finish training", "green", "on_red"))
+                    break
+                bar.update()
+            except KeyboardInterrupt:
+                tqdm.write(colored("Early stop triggered by Keyboard Input", "green", "on_red"))
         bar.close()
 
     print(colored("Done!", "black", "on_green"), "\n")
@@ -358,25 +302,8 @@ def main() -> None:
     model = t_loss.get_best_model()
     print(colored(f"The best model has the validation loss of {t_loss.lowest_loss}", "cyan"))
 
-    # Save the models
-    ## Create a sub folder
-    root_saving_dir = os.path.join(MODEL_DIR, MODEL_NAME)
-    if not os.path.exists(root_saving_dir):
-        os.mkdir(root_saving_dir)
-
-    model_saving_dir = os.path.join(root_saving_dir, MODEL_NAME)
-    print(f"Save data to {model_saving_dir}")
-    torch.save(model.state_dict(), model_saving_dir)
-
-    # Visualize training process
-    loss_history = t_loss.get_loss_history()
-    fig_name = f"{MODEL_NAME}_loss_history"
-    plt.plot(range(len(loss_history)), loss_history)
-    plt.title(fig_name)
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss (MSE)")
-    plt.figtext(0, 0, f"Minimum loss: {t_loss.lowest_loss}", color="#a41095")
-    plt.savefig(os.path.join(root_saving_dir, f"{fig_name}.png"), dpi=300)
+    save_model(model, MODEL_DIR, MODEL_NAME)
+    visualize_val_loss(t_loss, MODEL_DIR, MODEL_NAME)
     return
 
 if __name__ == "__main__":

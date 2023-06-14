@@ -28,3 +28,11 @@ def split_data(data: pd.DataFrame):
     print("Validation set shape:", X_val.shape, y_val.shape)
     print("Test set shape:", X_test.shape, y_test.shape)
     return X_train, y_train, X_val, y_val, X_test, y_test
+
+def planned_obsolete(target):
+    cnt = 0
+    if target > cnt:
+        cnt += 1
+        yield
+    else:
+        raise Exception

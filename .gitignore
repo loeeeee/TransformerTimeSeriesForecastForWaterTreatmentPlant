@@ -11,6 +11,7 @@ __pycache__
 model
 doc
 transformer_experiment*
+da_rnn_experiment*
 
 # Environment
 .env

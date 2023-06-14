@@ -1,9 +1,13 @@
 import math
+import utils
+import inference
 
 import torch
 from torch import nn
 
 from typing import Tuple
+from tqdm import tqdm
+from helper import planned_obsolete
 
 import pandas as pd
 
@@ -150,6 +154,108 @@ class TimeSeriesTransformer(nn.Module):
 
         return forecast
     
+    def learn(self,
+              dataloader: torch.utils.data.DataLoader,
+              loss_fn: any,
+              optimizer: torch.optim,
+              device: str,
+              forecast_length: int,
+              knowledge_length: int) -> None:
+        # Start training
+        self.train()
+
+        bar = tqdm(total=len(dataloader), position=0)
+        total_loss = 0
+        # Generate masks
+        src_mask = utils.generate_square_subsequent_mask(
+            dim1=forecast_length,
+            dim2=knowledge_length
+            )
+        # for idx, row in enumerate(src_mask):
+        #     tqdm.write(f"src_mask line {str(idx).zfill(2)}: {row}")
+        
+        tgt_mask = utils.generate_square_subsequent_mask(
+            dim1=forecast_length,
+            dim2=forecast_length
+            )
+        # for idx, row in enumerate(tgt_mask):
+        #     tqdm.write(f"tgt_mask line {str(idx).zfill(2)}: {row}")
+            
+        # tqdm.write(f"tgt_mask shape: {tgt_mask.shape}\nsrc_mask: {src_mask.shape}\n")
+        for i, (src, tgt, tgt_y) in enumerate(dataloader):
+            src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
+
+            # zero the parameter gradients
+            optimizer.zero_grad()
+
+            # Make forecasts
+            prediction = self(src, tgt, src_mask, tgt_mask)
+
+            # Compute and backprop loss
+            # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {prediction.shape}\n")
+            loss = loss_fn(tgt_y, prediction)
+            total_loss += loss.item()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+
+            # Take optimizer step
+            optimizer.step()
+
+            bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(i+1)):.3f}", refresh=True)
+            bar.update()
+            # planned_obsolete(5)
+        bar.close()
+        return
+    
+    def val(self,
+            dataloader: torch.utils.data.DataLoader,
+            loss_fn: any,
+            device: str,
+            forecast_length: int,
+            knowledge_length: int,
+            metrics: list) -> None:
+        num_batches = len(dataloader)
+        size = len(dataloader.dataset)
+        # Start evaluation
+        self.eval()
+
+        additional_loss = {}
+        for additional_monitor in metrics:
+            additional_loss[str(type(additional_monitor))] = 0
+
+        with torch.no_grad():
+            test_loss = 0
+            correct = 0
+            bar = tqdm(total=len(dataloader), position=0)
+            for i, (src, tgt, tgt_y) in enumerate(dataloader):
+                src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
+                # tqdm.write(f"{src.shape}, {tgt.shape}, {tgt_y.shape}")
+                pred = inference.run_encoder_decoder_inference(
+                   self, 
+                   src, 
+                   forecast_length,
+                   src.shape[1],
+                   device
+                   )
+
+                # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {pred.shape}\n")
+                test_loss += loss_fn(pred, tgt_y).item()
+                correct += (pred == tgt_y).type(torch.float).sum().item()
+                for additional_monitor in metrics:
+                    additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
+                bar.update()
+                bar.set_description(desc=f"Loss: {(test_loss/(1+i)):.3f}", refresh=True)
+            bar.close()
+        test_loss /= num_batches
+        correct /= size
+        tqdm.write(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} ")
+        for additional_monitor in metrics:
+            name = str(type(additional_monitor))[8:-2].split(".")[-1]
+            loss = additional_loss[str(type(additional_monitor))] / num_batches
+            tqdm.write(f" {name}: {loss:>8f}")
+        tqdm.write("\n")
+        return test_loss
+    
 
 class TransformerDataset(torch.utils.data.Dataset):
     """
@@ -197,6 +303,7 @@ class TransformerDataset(torch.utils.data.Dataset):
                                 knowledge_start + self.knowledge_length + self.forecast_length]      
         return result_src, result_tgt, result_tgt_y
     
+
 def transformer_collate_fn(data):
     """
     src, tgt, tgt_y
