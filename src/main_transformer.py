@@ -12,7 +12,6 @@ from torch.utils.data import DataLoader
 
 import pandas as pd
 import matplotlib.pyplot as plt
-import intel_extension_for_pytorch as ipex
 
 from tqdm import tqdm
 from termcolor import colored
@@ -40,12 +39,8 @@ MODEL_DIR = os.environ["MODEL_DIR"]
 WORKING_DIR = os.path.join(MODEL_DIR, MODEL_NAME)
 create_folder_if_not_exists(WORKING_DIR)
 
-# Check Intel optimization
-INTEL = ipex.cpu.runtime.is_runtime_ext_enabled()
-
 print(colored(f"Read from {INPUT_DATA}", "black", "on_green"))
 print(colored(f"Save all files to {WORKING_DIR}", "black", "on_green"))
-print(colored(f"Intel runtime extension is {INTEL}", "black", "on_cyan"))
 print()
 
 # Subprocess

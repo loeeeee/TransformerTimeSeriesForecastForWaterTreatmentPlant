@@ -13,7 +13,6 @@ from helper import planned_obsolete, create_folder_if_not_exists
 
 import pandas as pd
 import matplotlib.pyplot as plt
-import intel_extension_for_pytorch as ipex
 
 class PositionalEncoding(nn.Module):
     """

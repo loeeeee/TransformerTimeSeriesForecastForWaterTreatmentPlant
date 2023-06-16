@@ -9,7 +9,6 @@ debugpy==1.6.7
 decorator==5.1.1
 executing==1.2.0
 filelock==3.9.0
--e git+ssh://git@github.com/AIStream-Peelout/flow-forecast.git@b2f495575662eda9766bfff22e48e1d1a47806c0#egg=flood_forecast
 fonttools==4.39.4
 idna==3.4
 intel-extension-for-pytorch==2.0.100+cpu

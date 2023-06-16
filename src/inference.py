@@ -86,12 +86,12 @@ def run_encoder_decoder_inference(
         tgt_mask = utils.generate_square_subsequent_mask(
             dim1=dim_a,
             dim2=dim_a,
-            )
+            ).to(device)
 
         src_mask = utils.generate_square_subsequent_mask(
             dim1=dim_a,
             dim2=dim_b,
-            )
+            ).to(device)
 
         # Make prediction
         prediction = model(src, tgt, src_mask, tgt_mask) 
@@ -127,12 +127,12 @@ def run_encoder_decoder_inference(
     tgt_mask = utils.generate_square_subsequent_mask(
         dim1=dim_a,
         dim2=dim_a,
-        )
+        ).to(device)
 
     src_mask = utils.generate_square_subsequent_mask(
         dim1=dim_a,
         dim2=dim_b,
-        )
+        ).to(device)
 
     # Make final prediction
     final_prediction = model(src, tgt, src_mask, tgt_mask)
