@@ -1,4 +1,5 @@
 import settings # Read the config
+import os
 
 import pandas as pd
 from termcolor import colored
@@ -36,3 +37,11 @@ def planned_obsolete(target):
         yield
     else:
         raise Exception
+    
+def create_folder_if_not_exists(dir) -> bool:
+    """
+    Return bool, indicating if the folder is *newly* created
+    """
+    if not (isExist := os.path.exists(dir)):
+        os.mkdir(dir)
+    return isExist

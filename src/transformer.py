@@ -1,3 +1,5 @@
+import os
+import re
 import math
 import utils
 import inference
@@ -5,11 +7,13 @@ import inference
 import torch
 from torch import nn
 
-from typing import Tuple
 from tqdm import tqdm
-from helper import planned_obsolete
+from typing import Tuple, Union
+from helper import planned_obsolete, create_folder_if_not_exists
 
 import pandas as pd
+import matplotlib.pyplot as plt
+import intel_extension_for_pytorch as ipex
 
 class PositionalEncoding(nn.Module):
     """
@@ -47,6 +51,7 @@ class TimeSeriesTransformer(nn.Module):
                  multi_head_attention_head_size: int    = 8,
                  num_of_encoder_layers: int             = 4,
                  num_of_decoder_layers: int             = 4,
+                 model_name: str                        = "time_series_transformer",
                  **kwargs
                  ) -> None:
         """
@@ -59,6 +64,8 @@ class TimeSeriesTransformer(nn.Module):
         num_of_decoder_layers: literally
         """
         super().__init__()
+        
+        self.model_name = model_name
 
         # Input embedding
         self.encoder_input_layer = nn.Linear(
@@ -163,6 +170,7 @@ class TimeSeriesTransformer(nn.Module):
               knowledge_length: int) -> None:
         # Start training
         self.train()
+        # self, optimizer = ipex.optimize(self, optimizer=optimizer, dtype=torch.float32)
 
         bar = tqdm(total=len(dataloader), position=0)
         total_loss = 0
@@ -213,11 +221,16 @@ class TimeSeriesTransformer(nn.Module):
             device: str,
             forecast_length: int,
             knowledge_length: int,
-            metrics: list) -> None:
+            metrics: list,
+            visualize_dir: str,
+            which_to_plot: Union[None, list] = None
+            ) -> None:
         num_batches = len(dataloader)
         size = len(dataloader.dataset)
+        visualizer = TransformerVisualizer(forecast_length, visualize_dir, self.model_name)
         # Start evaluation
         self.eval()
+        # self = ipex.optimize(self, dtype=torch.float32)
 
         additional_loss = {}
         for additional_monitor in metrics:
@@ -238,6 +251,11 @@ class TimeSeriesTransformer(nn.Module):
                    device
                    )
 
+                visualizer.add_data(
+                    ground_truth_series = tgt_y,
+                    forecast_series     = pred,
+                    )
+                
                 # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {pred.shape}\n")
                 test_loss += loss_fn(pred, tgt_y).item()
                 correct += (pred == tgt_y).type(torch.float).sum().item()
@@ -249,6 +267,7 @@ class TimeSeriesTransformer(nn.Module):
         test_loss /= num_batches
         correct /= size
         tqdm.write(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} ")
+        visualizer.plot_forecast_vs_ground_truth(which_to_plot)
         for additional_monitor in metrics:
             name = str(type(additional_monitor))[8:-2].split(".")[-1]
             loss = additional_loss[str(type(additional_monitor))] / num_batches
@@ -314,3 +333,136 @@ def transformer_collate_fn(data):
         result[i] = torch.stack(result[i])
         result[i] = result[i].permute(1, 0, 2)
     return result[0], result[1], result[2]
+
+class TransformerVisualizer:
+    def __init__(
+            self, 
+            forecast_length: int,
+            save_dir: str,
+            model_name: str
+            ) -> None:
+        """
+        Only works for single feature prediction
+        """
+        self.forecast_length    = forecast_length
+        self.save_dir           = save_dir
+        self.model_name         = model_name
+        # Runtime variable
+        self.all_ground_truth   = []
+        self.all_forecast_guess = [[] for i in range(self.forecast_length)]
+
+    def add_data(
+            self, 
+            ground_truth_series: torch.Tensor, 
+            forecast_series: torch.Tensor
+            ) -> None:
+        """
+        For the simplicity of coding, last data will be dropped
+        """
+        batch_size = ground_truth_series.shape[1]
+        ground_truth_series_np = ground_truth_series.numpy()
+        forecast_series_np = forecast_series.numpy()
+        for i in range(batch_size):
+            self.all_ground_truth.append(ground_truth_series_np[0, i, 0])
+            for j in range(self.forecast_length):
+                self.all_forecast_guess[j].append(forecast_series_np[j, i, 0])
+
+        # Dropping last data
+        ## Ground truth is shorter than the forecast_guess
+        ## Cut the forecast guess to the length of the ground truth
+        ground_truth_length = len(self.all_ground_truth)
+        self.all_forecast_guess = [i[:ground_truth_length] for i in self.all_forecast_guess]
+        return
+    
+    def plot_forecast_vs_ground_truth(self, which_to_plot: Union[None, list] = None) -> None:
+        """
+        which_to_plot: accept a list that contains the forecast sequence user would like to plot,
+            Default: all
+            Usage example: [0, 3, 5] plot forecast sequence 0, 3, 5.
+        """
+        fig_name = f"{self.model_name}_prediction_trend"
+        # Create subfolder
+        working_dir = os.path.join(self.save_dir, fig_name)
+        create_folder_if_not_exists(working_dir)
+        # Get figure sequence
+        fig_sequence = self._get_plot_sequence(working_dir, fig_name)
+
+        # Create a figure and axis
+        fig, ax = plt.subplots()
+
+        # Plot the data
+        default_colors = ['#1f77b4', 
+                          '#ff7f0e', 
+                          '#2ca02c', 
+                          '#d62728', 
+                          '#9467bd', 
+                          '#8c564b', 
+                          '#e377c2',
+                          '#7f7f7f', 
+                          '#bcbd22', 
+                          '#17becf'
+                          ]
+        x_axis = range(len(self.all_ground_truth))
+        ax.plot(x_axis, self.all_ground_truth, linewidth=2)
+        for i, c in zip(range(self.forecast_length), default_colors):
+            if which_to_plot == None:
+                pass
+            elif i not in which_to_plot:
+                continue
+            data = self.all_forecast_guess[i]
+            label = f"{i}-unit forecast line"
+            ax.plot(data, linewidth=1, label=label, color=c, alpha=0.5)
+            
+        # Add labels and title
+        ax.set_xlabel('Time')
+        ax.set_ylabel('Data')
+        ax.set_title('Prediction Trend Plot')
+
+        # Add grid lines
+        ax.grid(True, linestyle='--', alpha=0.7)
+
+        # Customize the tick labels
+        ax.tick_params(axis='x', rotation=45)
+
+        # Add a background color
+        ax.set_facecolor('#F2F2F2')
+
+        # Remove the top and right spines
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+        # Add title
+        plt.title(" ".join(fig_name.split("_")))
+
+        # Show the plot
+        plt.savefig(
+            os.path.join(
+                working_dir, 
+                f"{fig_name}_{fig_sequence}.png"
+                ), 
+            dpi = 400)
+        plt.clf()
+        return
+    
+    def _get_plot_sequence(self, working_dir: str, fig_name: str) -> int:
+        """
+        See if there is already a plot there
+        """
+        max_sequence = -1
+
+        for filename in os.listdir(working_dir):
+            if filename.endswith('.png'):
+                # Extract the base name and sequence number from the file name
+                base, ext = os.path.splitext(filename)
+                parts = base.split('_')
+
+                if (len(parts) > 1 and '_'.join(parts[:-1]) == fig_name) or len(parts) == 1:
+                    # Extract the sequence number from the last part
+                    sequence_number = int(parts[-1])
+
+                    if sequence_number > max_sequence:
+                        max_sequence = sequence_number
+
+        new_sequence_number = max_sequence + 1
+
+        return new_sequence_number

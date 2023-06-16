@@ -2,7 +2,7 @@ import settings # Get config
 import utils # TODO: recode this
 import inference # TODO: recode this
 
-from helper import console_general_data_info
+from helper import console_general_data_info, create_folder_if_not_exists
 from torch_helper import get_best_device, TrackerLoss, TrackerEpoch
 from transformer import TimeSeriesTransformer, TransformerDataset, transformer_collate_fn
 
@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 
 import pandas as pd
 import matplotlib.pyplot as plt
+import intel_extension_for_pytorch as ipex
 
 from tqdm import tqdm
 from termcolor import colored
@@ -35,7 +36,17 @@ VISUAL_DIR = os.environ["VISUAL_DIR"]
 DATA_DIR = os.environ["DATA_DIR"]
 MODEL_DIR = os.environ["MODEL_DIR"]
 
-print(f"Read from {INPUT_DATA}")
+# Create working dir
+WORKING_DIR = os.path.join(MODEL_DIR, MODEL_NAME)
+create_folder_if_not_exists(WORKING_DIR)
+
+# Check Intel optimization
+INTEL = ipex.cpu.runtime.is_runtime_ext_enabled()
+
+print(colored(f"Read from {INPUT_DATA}", "black", "on_green"))
+print(colored(f"Save all files to {WORKING_DIR}", "black", "on_green"))
+print(colored(f"Intel runtime extension is {INTEL}", "black", "on_cyan"))
+print()
 
 # Subprocess
 def train_test(dataloader: DataLoader,
@@ -103,24 +114,13 @@ def load_data(path, name) -> pd.DataFrame:
 
     return data
 
-def save_model(model: nn.Module, save_dir: str, model_name: str) -> None:
-    # Save the models
-    ## Create a sub folder
-    root_saving_dir = os.path.join(save_dir, model_name)
-    if not os.path.exists(root_saving_dir):
-        os.mkdir(root_saving_dir)
-
-    model_saving_dir = os.path.join(root_saving_dir, model_name)
-    print(f"Save data to {model_saving_dir}")
-    torch.save(model.state_dict(), model_saving_dir)
+def save_model(model: nn.Module, root_saving_dir: str) -> None:
+    print(f"Save data to {root_saving_dir}")
+    save_dir = os.path.join(root_saving_dir, model.model_name)
+    torch.save(model.state_dict(), f"{save_dir}.pt")
     return
 
-def visualize_val_loss(t_loss: TrackerLoss, save_dir: str, model_name: str) -> None:
-    ## Create a sub folder
-    root_saving_dir = os.path.join(save_dir, model_name)
-    if not os.path.exists(root_saving_dir):
-        os.mkdir(root_saving_dir)
-
+def visualize_val_loss(t_loss: TrackerLoss, root_saving_dir: str) -> None:
     # Visualize training process
     loss_history = t_loss.get_loss_history()
     fig_name = f"{MODEL_NAME}_loss_history"
@@ -157,7 +157,7 @@ PAC pump 2 speed           float32
 
 def main() -> None:
     # HYPERPARAMETER
-    knowledge_length    = 24    # 3 hours
+    knowledge_length    = 24    # 4 hours
     forecast_length     = 6     # 1 hour
     batch_size          = 128    # 32 is pretty small
 
@@ -168,7 +168,7 @@ def main() -> None:
     val = load_data(INPUT_DATA, "val")
     console_general_data_info(train)
 
-    train = train.head(10000) # HACK Out of memory
+    train = train.head(1000) # HACK Out of memory
     val = val.head(1000)
 
     # Split data
@@ -192,6 +192,13 @@ def main() -> None:
     train_tgt = torch.tensor(train_tgt.values).unsqueeze(1)
     val_src = torch.tensor(val_src.values)
     val_tgt = torch.tensor(val_tgt.values).unsqueeze(1)
+    ## Check the tensor data type
+    print(colored("Check tensor data type", "green"))
+    print(f"train_src data type: {train_src.dtype}")
+    print(f"train_tgt data type: {train_tgt.dtype}")
+    print(f"val_src data type: {val_src.dtype}")
+    print(f"val_tgt data type: {val_tgt.dtype}\n")
+
 
     # Context based variable
     input_feature_size = train_src.shape[1]
@@ -228,7 +235,8 @@ def main() -> None:
     print(colored(f"Using {device} for training", "black", "on_green"), "\n")
     model = TimeSeriesTransformer(
         input_feature_size,
-        forecast_feature_size
+        forecast_feature_size,
+        model_name = MODEL_NAME
     ).to(device)
     print(colored("Model structure:", "black", "on_green"), "\n")
     print(model)
@@ -242,9 +250,8 @@ def main() -> None:
     ## Optimizer
     lr = 0.001  # learning rate
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.98)
-    # optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    t_epoch = TrackerEpoch(50)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.995)
+    t_epoch = TrackerEpoch(70)
     t_loss = TrackerLoss(5, model)
     print(colored("Training:", "black", "on_green"), "\n")
     with tqdm(total=t_epoch.max_epoch, unit="epoch", position=1) as bar:
@@ -275,16 +282,20 @@ def main() -> None:
                     forecast_length,
                     knowledge_length
                 )
+                bar.refresh()
+
                 loss = model.val(
                     val_loader, 
                     loss_fn, 
                     device,
                     forecast_length,
                     knowledge_length, 
-                    metrics)
+                    metrics,
+                    WORKING_DIR,
+                    which_to_plot=[0,int(forecast_length/2), forecast_length]
+                    )
 
                 scheduler.step()
-
                 if not t_loss.check(loss, model):
                     tqdm.write(colored("Loss no longer decrease, finish training", "green", "on_red"))
                     break
@@ -294,6 +305,7 @@ def main() -> None:
                 bar.update()
             except KeyboardInterrupt:
                 tqdm.write(colored("Early stop triggered by Keyboard Input", "green", "on_red"))
+                break
         bar.close()
 
     print(colored("Done!", "black", "on_green"), "\n")
@@ -302,8 +314,8 @@ def main() -> None:
     model = t_loss.get_best_model()
     print(colored(f"The best model has the validation loss of {t_loss.lowest_loss}", "cyan"))
 
-    save_model(model, MODEL_DIR, MODEL_NAME)
-    visualize_val_loss(t_loss, MODEL_DIR, MODEL_NAME)
+    save_model(model, WORKING_DIR)
+    visualize_val_loss(t_loss, WORKING_DIR)
     return
 
 if __name__ == "__main__":
