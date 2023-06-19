@@ -301,11 +301,30 @@ def normalization_and_scaling(data: pd.DataFrame) -> pd.DataFrame:
     for column in target_columns:
         scaler = StandardScaler()
         scaled_data = scaler.fit_transform(np.reshape(np.array(data[column]), (-1, 1)))
-        transformer = PowerTransformer(method='yeo-johnson')
-        mapped_data = transformer.fit_transform(scaled_data)
-        data[column] = mapped_data
+        # transformer = PowerTransformer(method='yeo-johnson')
+        # mapped_data = transformer.fit_transform(scaled_data)
+        # data[column] = mapped_data
         data[column] = scaled_data
-    return data
+
+    target_columns = [
+        "line 1 pump speed",
+        "line 2 pump speed",
+        "PAC pump 1 speed",
+        "PAC pump 2 speed"
+    ]
+    scaling_factors = []
+    for column in target_columns:
+        scaler = StandardScaler()
+        scaled_data = scaler.fit_transform(np.reshape(np.array(data[column]), (-1, 1)))
+        average = scaler.mean_[0]
+        stddev = scaler.scale_[0]
+        scaling_factors.append([column, average, stddev])
+        data[column] = scaled_data
+    scaling_factors = pd.DataFrame(
+        scaling_factors, 
+        columns = ["name", "average", "stddev"]
+        )
+    return data, scaling_factors
 
 def save_data_csv(path: str, 
                   name: str, 
@@ -396,8 +415,9 @@ def main() -> None:
                   **train_test_split_config)
 
     # Normalization and scaling data
-    data = normalization_and_scaling(data)
+    data, scaling_factors = normalization_and_scaling(data)
     console_general_data_info(data)
+    console_general_data_info(scaling_factors)
     visual_data_distribution("data_distribution_normed", data)
     
     # Saving data
@@ -406,6 +426,9 @@ def main() -> None:
                   data, 
                   split=True, 
                   **train_test_split_config)
+    scaling_factors.to_csv(
+        os.path.join(DATA_DIR, "processed_norm/scaling_factors.csv"),
+    )
     return
 
 if __name__ == "__main__":

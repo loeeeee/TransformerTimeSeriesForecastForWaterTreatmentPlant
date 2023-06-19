@@ -8,6 +8,7 @@ import torch
 from torch import nn
 
 from tqdm import tqdm
+from termcolor import colored
 from typing import Tuple, Union
 from helper import planned_obsolete, create_folder_if_not_exists
 
@@ -177,14 +178,14 @@ class TimeSeriesTransformer(nn.Module):
         src_mask = utils.generate_square_subsequent_mask(
             dim1=forecast_length,
             dim2=knowledge_length
-            )
+            ).to(device)
         # for idx, row in enumerate(src_mask):
         #     tqdm.write(f"src_mask line {str(idx).zfill(2)}: {row}")
         
         tgt_mask = utils.generate_square_subsequent_mask(
             dim1=forecast_length,
             dim2=forecast_length
-            )
+            ).to(device)
         # for idx, row in enumerate(tgt_mask):
         #     tqdm.write(f"tgt_mask line {str(idx).zfill(2)}: {row}")
             
@@ -222,8 +223,13 @@ class TimeSeriesTransformer(nn.Module):
             knowledge_length: int,
             metrics: list,
             visualize_dir: str,
-            which_to_plot: Union[None, list] = None
+            which_to_plot: Union[None, list] = None,
+            scaling_factors: tuple[float, float] = (1, 1),
             ) -> None:
+        """
+        Which to plot: receive a list that contains the forecast sequence needed to be plotted
+        scaler: receive a tuple, (average, stddev). The scaler is used to reproduce original values, instead of the normalized ones.
+        """
         num_batches = len(dataloader)
         size = len(dataloader.dataset)
         visualizer = TransformerVisualizer(forecast_length, visualize_dir, self.model_name)
@@ -256,21 +262,21 @@ class TimeSeriesTransformer(nn.Module):
                     )
                 
                 # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {pred.shape}\n")
-                test_loss += loss_fn(pred, tgt_y).item()
+                test_loss += (loss_fn(pred, tgt_y).item() * scaling_factors[0])
                 correct += (pred == tgt_y).type(torch.float).sum().item()
                 for additional_monitor in metrics:
-                    additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
+                    additional_loss[str(type(additional_monitor))] += (additional_monitor(pred, tgt_y).item() * scaling_factors[0])
                 bar.update()
                 bar.set_description(desc=f"Loss: {(test_loss/(1+i)):.3f}", refresh=True)
             bar.close()
         test_loss /= num_batches
         correct /= size
         tqdm.write(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} ")
-        visualizer.plot_forecast_vs_ground_truth(which_to_plot)
         for additional_monitor in metrics:
             name = str(type(additional_monitor))[8:-2].split(".")[-1]
             loss = additional_loss[str(type(additional_monitor))] / num_batches
             tqdm.write(f" {name}: {loss:>8f}")
+        visualizer.plot_forecast_vs_ground_truth(which_to_plot)
         tqdm.write("\n")
         return test_loss
     
@@ -359,8 +365,8 @@ class TransformerVisualizer:
         For the simplicity of coding, last data will be dropped
         """
         batch_size = ground_truth_series.shape[1]
-        ground_truth_series_np = ground_truth_series.numpy()
-        forecast_series_np = forecast_series.numpy()
+        ground_truth_series_np = ground_truth_series.cpu().numpy()
+        forecast_series_np = forecast_series.cpu().numpy()
         for i in range(batch_size):
             self.all_ground_truth.append(ground_truth_series_np[0, i, 0])
             for j in range(self.forecast_length):
@@ -402,6 +408,8 @@ class TransformerVisualizer:
                           '#17becf'
                           ]
         x_axis = range(len(self.all_ground_truth))
+        print(colored(f"Length of ground truth: {len(self.all_ground_truth)}", "green"))
+        print(colored(f"Length of forecast_guess: {len(self.all_forecast_guess[0])}", "green"))
         ax.plot(x_axis, self.all_ground_truth, linewidth=2)
         for i, c in zip(range(self.forecast_length), default_colors):
             if which_to_plot == None:
@@ -410,12 +418,13 @@ class TransformerVisualizer:
                 continue
             data = self.all_forecast_guess[i]
             label = f"{i}-unit forecast line"
-            ax.plot(data, linewidth=1, label=label, color=c, alpha=0.5)
+            ax.plot(x_axis, data, linewidth=1, label=label, color=c, alpha=0.5)
             
         # Add labels and title
         ax.set_xlabel('Time')
         ax.set_ylabel('Data')
         ax.set_title('Prediction Trend Plot')
+        plt.legend(loc="upper left")
 
         # Add grid lines
         ax.grid(True, linestyle='--', alpha=0.7)

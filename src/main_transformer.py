@@ -1,3 +1,6 @@
+"""
+This transformer code works on the fully normalized input, and multiply the loss by the scaling factors
+"""
 import settings # Get config
 import utils # TODO: recode this
 import inference # TODO: recode this
@@ -151,6 +154,9 @@ PAC pump 2 speed           float32
 """
 
 def main() -> None:
+    device = get_best_device()
+    print(colored(f"Using {device} for training", "black", "on_green"), "\n")
+
     # HYPERPARAMETER
     knowledge_length    = 24    # 4 hours
     forecast_length     = 6     # 1 hour
@@ -162,25 +168,33 @@ def main() -> None:
     train = load_data(INPUT_DATA, "train")
     val = load_data(INPUT_DATA, "val")
     console_general_data_info(train)
+    # Add scaling factors, it for explanation of the model
+    scaling_factors = pd.read_csv(
+        os.path.join(INPUT_DATA, "scaling_factors.csv"),
+        index_col = 0,
+        usecols = [1, 2, 3]
+        )
 
-    train = train.head(1000) # HACK Out of memory
-    val = val.head(1000)
+    #train = train.head(10000) # HACK Out of memory
+    #val = val.head(1000)
 
     # Split data
+    tgt_column = "line 1 pump speed"
     train_src = train.drop(columns=[
         "line 1 pump speed",
         "line 2 pump speed",
         "PAC pump 1 speed",
         "PAC pump 2 speed",
     ])
-    train_tgt = train["line 1 pump speed"]
+    train_tgt = train[tgt_column]
     val_src = val.drop(columns=[
         "line 1 pump speed",
         "line 2 pump speed",
         "PAC pump 1 speed",
         "PAC pump 2 speed",
     ])
-    val_tgt = val["line 1 pump speed"]
+    val_tgt = val[tgt_column]
+    scaling_factors = scaling_factors.loc[[tgt_column]]
 
     # Convert data to Tensor object
     train_src = torch.tensor(train_src.values)
@@ -226,8 +240,6 @@ def main() -> None:
     )
 
     # Model
-    device = get_best_device()
-    print(colored(f"Using {device} for training", "black", "on_green"), "\n")
     model = TimeSeriesTransformer(
         input_feature_size,
         forecast_feature_size,
@@ -243,16 +255,24 @@ def main() -> None:
     mae = nn.L1Loss()
     metrics.append(mae)
     ## Optimizer
-    lr = 0.001  # learning rate
+    lr = 0.0001  # learning rate
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.995)
+    scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.995)
+    scheduler_1 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer = optimizer,
+        T_0 = 5,
+    )
+    scheduler_2 = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer = optimizer,
+        patience = 2,
+    )
     t_epoch = TrackerEpoch(70)
     t_loss = TrackerLoss(5, model)
     print(colored("Training:", "black", "on_green"), "\n")
     with tqdm(total=t_epoch.max_epoch, unit="epoch", position=1) as bar:
         while True:
             try:
-                lr = scheduler.get_last_lr()[0]
+                lr = scheduler_0.get_last_lr()[0]
                 tqdm.write("----------------------------------")
                 tqdm.write(colored(f"Epoch {t_epoch.epoch()}", "green"))
                 tqdm.write(colored(f"Learning rate {lr}", "green"))
@@ -287,10 +307,14 @@ def main() -> None:
                     knowledge_length, 
                     metrics,
                     WORKING_DIR,
-                    which_to_plot=[0,int(forecast_length/2), forecast_length]
+                    which_to_plot = [0,int(forecast_length/2), forecast_length-1],
+                    scaling_factors = [scaling_factors["average"].values[0], scaling_factors["stddev"].values[0]],
                     )
 
-                scheduler.step()
+                scheduler_0.step()
+                scheduler_1.step()
+                scheduler_2.step(loss)
+
                 if not t_loss.check(loss, model):
                     tqdm.write(colored("Loss no longer decrease, finish training", "green", "on_red"))
                     break
