@@ -12,6 +12,8 @@ model
 doc
 transformer_experiment*
 da_rnn_experiment*
+flow_forecast
+experiment
 
 # Environment
 .env
