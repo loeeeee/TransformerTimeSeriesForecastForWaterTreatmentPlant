@@ -239,7 +239,8 @@ class TransformerVisualLogger:
                 working_dir, 
                 f"{fig_name}_{fig_sequence}.svg"
                 ), 
-            dpi = 400)
+            dpi = 400,
+            format = "svg")
         plt.clf()
         plt.close()
         return
