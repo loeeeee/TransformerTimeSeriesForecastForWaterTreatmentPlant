@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler, PowerTransformer
 from sklearn.model_selection import train_test_split
 
-from helper import console_general_data_info
+from helper import console_general_data_info, create_folder_if_not_exists
 
 INPUT_DATA = sys.argv[1]
 VISUAL_DIR = os.environ["VISUAL_DIR"]
@@ -117,6 +117,55 @@ def visualize_correlation(data: pd.DataFrame) -> None:
     ## f4, f18, f19, f12
    
     # data =  data.drop(columns = ["f4", "f18", "f12"])
+
+def visualize_data_trend(data: pd.DataFrame) -> None:
+    for i in data:
+        fig_name = "data_trend"
+        # Create subfolder
+        working_dir = os.path.join(
+            VISUAL_DIR, 
+            fig_name
+            )
+        create_folder_if_not_exists(working_dir)
+
+        # Create a figure and axis
+        fig, ax = plt.subplots()
+
+        # Plot the data
+        ax.plot(data[i], linewidth=2)
+            
+        # Add labels and title
+        ax.set_xlabel('Time')
+        ax.set_ylabel('Data')
+        ax.set_title('Prediction Trend Plot')
+
+        # Add grid lines
+        ax.grid(True, linestyle='--', alpha=0.7)
+
+        # Customize the tick labels
+        ax.tick_params(axis='x', rotation=45)
+
+        # Add a background color
+        ax.set_facecolor('#F2F2F2')
+
+        # Remove the top and right spines
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+        # Add title
+        plt.title(" ".join(fig_name.split("_")))
+
+        # Show the plot
+        plt.savefig(
+            os.path.join(
+                working_dir, 
+                f"{i}_trend.png"
+                ), 
+            dpi = 400,
+            format = "png")
+        plt.clf()
+        plt.close()
+    return
 
 def drop_zeros(data: pd.DataFrame) -> pd.DataFrame:
     ## Data zero and NaN value fix
@@ -389,6 +438,7 @@ def main() -> None:
     visualize_correlation(data)
     console_general_data_info(data)
     visual_data_distribution("data_distribution_filled", data)
+    visualize_data_trend(data)
 
     # Saving data
     save_data_csv(DATA_DIR, 
