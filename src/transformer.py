@@ -15,6 +15,285 @@ from helper import planned_obsolete, create_folder_if_not_exists
 import pandas as pd
 import matplotlib.pyplot as plt
 
+
+class TransformerValidationVisualLogger:
+    """
+    Logging evaluation process for visualization
+    If runtime_plotting is set to false, save_data must be called before calling plot.
+    """
+    def __init__(self, 
+                 model_name: str,
+                 working_dir: str, 
+                 meta_data: dict = {},
+                 runtime_plotting: bool = True,
+                 which_to_plot: Union[None, list] = None,
+                 ) -> None:
+        """
+        runtime_plotting: True means plot when a new data is added
+        """
+        self.model_name = model_name
+        self.working_dir = working_dir
+        self.metadata = meta_data
+        self.runtime_plotting = runtime_plotting
+        self.which_to_plot = which_to_plot
+        self.isFinished = False
+
+        self.in_batch_ground_truth = []
+        self.in_batch_forecast_guess = []
+        self.data_pair = []
+
+    def append(self, 
+               ground_truth, 
+               forecast_guess
+               ) -> None:
+        """
+        Add data pair to the runtime storage
+        """
+        # Metadata
+        batch_size = ground_truth.shape[1]
+        forecast_length = ground_truth.shape[0]
+        
+        # Not necessary if only use cpu
+        ground_truth_series_np = ground_truth.cpu().numpy()
+        forecast_series_np = forecast_guess.cpu().numpy()
+
+        # Init in batch forecast guess
+        if self.in_batch_forecast_guess == []:
+            self.in_batch_forecast_guess = [[] for i in range(forecast_length)]
+        
+        # Organize data
+        for i in range(batch_size):
+            self.in_batch_ground_truth.append(ground_truth_series_np[0, i, 0])
+            for j in range(forecast_length):
+                self.in_batch_forecast_guess[j].append(forecast_series_np[j, i, 0])
+
+        # Dropping last data
+        ## Ground truth is shorter than the forecast_guess
+        ## Cut the forecast guess to the length of the ground truth
+        ground_truth_length = len(self.in_batch_ground_truth)
+        self.in_batch_forecast_guess = [i[:ground_truth_length] for i in self.in_batch_forecast_guess]
+
+        return
+
+    def save_data(self, dir_overwrite: str = "") -> None:
+        """
+        Dump data to the file
+        """
+        # Create dir
+        if dir_overwrite == "":
+            dir = self.working_dir
+        else:
+            dir = dir_overwrite
+        dir = os.path.join(dir, "validation_log")
+        create_folder_if_not_exists(dir)
+
+        # Process data pair
+        data_pair = pd.DataFrame(
+            self.data_pair,
+            columns = ["ground_truth", "forecast_guess"],
+        )
+        data_pair.to_csv(
+            os.path.join(dir, "data_pair.csv"),
+        )
+
+        # Process meta data
+        metadata = pd.DataFrame(
+            self.metadata,
+            index = [0],
+        )
+        metadata.to_csv(
+            os.path.join(
+            dir, "metadata.csv"
+            )
+        )
+        # Set finish flag
+        self.isFinished = True
+        return
+    
+    def load_data(self) -> None:
+        """
+        Load from file
+        """
+        dir = os.path.join(self.working_dir, "validation_log")
+        self.data_pair = pd.read_csv(
+            os.path.join(
+            dir, "data_pair.csv"
+            )
+        )
+        self.metadata = pd.read_csv(
+            os.path.join(
+            dir, "metadata.csv"
+            )
+        )
+        return
+    
+    def plot(self) -> None:
+        # Organize data
+        self.data_pair.append((self.in_batch_ground_truth, self.in_batch_forecast_guess))
+        self.in_batch_ground_truth = []
+        self.in_batch_forecast_guess = []
+        # Start plotting
+        if self.runtime_plotting:
+            self._plot_forecast_vs_ground_truth(
+                which_to_plot = self.which_to_plot,
+            )
+        elif self.isFinished:
+            # Find y_min_max in both ground truth and forecast guess
+            global_min = 0x3f3f3f3f
+            global_max = -0x3f3f3f3f
+            for ground, forecast in self.data_pair:
+                y_min_0 = self._find_minimum_value(forecast)
+                y_max_0 = self._find_maximum_value(forecast)
+                y_min_1 = min(*[i for i in ground])
+                y_max_1 = max(*[i for i in ground])
+                y_min = min(y_min_0, y_min_1)
+                y_max = max(y_max_0, y_max_1)
+                if y_min < global_min:
+                    global_min = y_min
+                if y_max > global_max:
+                    global_max = y_max
+            y_min_max = (
+                global_min,
+                global_max
+            )
+            for i in range(len(self.data_pair)):
+                self._plot_forecast_vs_ground_truth(
+                    idx = i,
+                    which_to_plot = self.which_to_plot,
+                    y_min_max= y_min_max
+                )
+        return
+        
+    def _plot_forecast_vs_ground_truth(self, 
+                                       idx: int = -1, 
+                                       which_to_plot: Union[None, list] = None,
+                                       y_min_max: Union[None, tuple] = None,
+                                       ) -> None:
+        """
+        which_to_plot: accept a list that contains the forecast sequence user would like to plot,
+            Default: all
+            Usage example: [0, 3, 5] plot forecast sequence 0, 3, 5.
+        """
+        fig_name = f"{self.model_name}_prediction_trend"
+        # Create subfolder
+        working_dir = os.path.join(
+            self.working_dir, 
+            fig_name
+            )
+        create_folder_if_not_exists(working_dir)
+        # Get figure sequence
+        fig_sequence = self._get_plot_sequence(
+            working_dir, 
+            fig_name
+            )
+
+        # Create a figure and axis
+        fig, ax = plt.subplots()
+
+        # Plot the data
+        default_colors = ['#1f77b4', 
+                          '#ff7f0e', 
+                          '#2ca02c', 
+                          '#d62728', 
+                          '#9467bd', 
+                          '#8c564b', 
+                          '#e377c2',
+                          '#7f7f7f', 
+                          '#bcbd22', 
+                          '#17becf'
+                          ]
+        ground_truth, forecast_guess = self.data_pair[idx]
+        ax.plot(ground_truth, linewidth=2)
+        for i, c in zip(which_to_plot, default_colors):
+            data = forecast_guess[i]
+            label = f"{i}-unit forecast line"
+            ax.plot(data, linewidth=1, label=label, color=c, alpha=0.5)
+            
+        # Add labels and title
+        ax.set_xlabel('Time')
+        ax.set_ylabel('Data')
+        ax.set_title('Prediction Trend Plot')
+        plt.legend(loc="upper left")
+
+        # Add grid lines
+        ax.grid(True, linestyle='--', alpha=0.7)
+
+        # Customize the tick labels
+        ax.tick_params(axis='x', rotation=45)
+
+        # Add a background color
+        ax.set_facecolor('#F2F2F2')
+
+        # Control the size the fig
+        if y_min_max != None:
+            ax.set_ylim(y_min_max)
+
+        # Remove the top and right spines
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+        # Add title
+        plt.title(" ".join(fig_name.split("_")))
+
+        # Show the plot
+        plt.savefig(
+            os.path.join(
+                working_dir, 
+                f"{fig_name}_{fig_sequence}.png"
+                ), 
+            dpi = 400)
+        plt.clf()
+        plt.close()
+        return
+    
+    def _get_plot_sequence(self, working_dir: str, fig_name: str) -> int:
+        """
+        See if there is already a plot there
+        """
+        max_sequence = -1
+
+        for filename in os.listdir(working_dir):
+            if filename.endswith('.png'):
+                # Extract the base name and sequence number from the file name
+                base, ext = os.path.splitext(filename)
+                parts = base.split('_')
+
+                if (len(parts) > 1 and '_'.join(parts[:-1]) == fig_name) or len(parts) == 1:
+                    # Extract the sequence number from the last part
+                    sequence_number = int(parts[-1])
+
+                    if sequence_number > max_sequence:
+                        max_sequence = sequence_number
+
+        new_sequence_number = max_sequence + 1
+
+        return new_sequence_number
+    
+    def _find_minimum_value(self, matrix) -> float:
+        # Initialize the minimum value with the first element in the matrix
+        min_value = 0x3f3f3f3f
+
+        # Iterate over each row in the matrix
+        for row in matrix:
+            local_minimum = min(*row)
+            if local_minimum < min_value:
+                min_value = local_minimum
+
+        return min_value
+    
+    def _find_maximum_value(self, matrix) -> float:
+        # Initialize the minimum value with the first element in the matrix
+        max_value = -0x3f3f3f3f
+
+        # Iterate over each row in the matrix
+        for row in matrix:
+            local_maximum = max(*row)
+            if local_maximum > max_value:
+                max_value = local_maximum
+
+        return max_value
+        
+
 class PositionalEncoding(nn.Module):
     """
     Copied from pytorch tutorial
@@ -222,9 +501,8 @@ class TimeSeriesTransformer(nn.Module):
             forecast_length: int,
             knowledge_length: int,
             metrics: list,
-            visualize_dir: str,
-            which_to_plot: Union[None, list] = None,
-            scaling_factors: tuple[float, float] = (1, 1),
+            working_dir: str,
+            val_logger: Union[None, TransformerValidationVisualLogger] = None,
             ) -> None:
         """
         Which to plot: receive a list that contains the forecast sequence needed to be plotted
@@ -232,10 +510,9 @@ class TimeSeriesTransformer(nn.Module):
         """
         num_batches = len(dataloader)
         size = len(dataloader.dataset)
-        visualizer = TransformerVisualizer(forecast_length, visualize_dir, self.model_name)
+        # visualizer = TransformerVisualizer(forecast_length, working_dir, self.model_name)
         # Start evaluation
         self.eval()
-        # self = ipex.optimize(self, dtype=torch.float32)
 
         additional_loss = {}
         for additional_monitor in metrics:
@@ -255,17 +532,21 @@ class TimeSeriesTransformer(nn.Module):
                    src.shape[1],
                    device
                    )
-
+                
+                if val_logger != None:
+                    val_logger.append(tgt_y, pred)
+                """
                 visualizer.add_data(
                     ground_truth_series = tgt_y,
                     forecast_series     = pred,
                     )
-                
+                """
+
                 # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {pred.shape}\n")
-                test_loss += (loss_fn(pred, tgt_y).item() * scaling_factors[0])
+                test_loss += loss_fn(pred, tgt_y).item()
                 correct += (pred == tgt_y).type(torch.float).sum().item()
                 for additional_monitor in metrics:
-                    additional_loss[str(type(additional_monitor))] += (additional_monitor(pred, tgt_y).item() * scaling_factors[0])
+                    additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
                 bar.update()
                 bar.set_description(desc=f"Loss: {(test_loss/(1+i)):.3f}", refresh=True)
             bar.close()
@@ -276,7 +557,7 @@ class TimeSeriesTransformer(nn.Module):
             name = str(type(additional_monitor))[8:-2].split(".")[-1]
             loss = additional_loss[str(type(additional_monitor))] / num_batches
             tqdm.write(f" {name}: {loss:>8f}")
-        visualizer.plot_forecast_vs_ground_truth(which_to_plot)
+        # visualizer.plot_forecast_vs_ground_truth(which_to_plot)
         tqdm.write("\n")
         return test_loss
     
@@ -338,139 +619,3 @@ def transformer_collate_fn(data):
         result[i] = torch.stack(result[i])
         result[i] = result[i].permute(1, 0, 2)
     return result[0], result[1], result[2]
-
-class TransformerVisualizer:
-    def __init__(
-            self, 
-            forecast_length: int,
-            save_dir: str,
-            model_name: str
-            ) -> None:
-        """
-        Only works for single feature prediction
-        """
-        self.forecast_length    = forecast_length
-        self.save_dir           = save_dir
-        self.model_name         = model_name
-        # Runtime variable
-        self.all_ground_truth   = []
-        self.all_forecast_guess = [[] for i in range(self.forecast_length)]
-
-    def add_data(
-            self, 
-            ground_truth_series: torch.Tensor, 
-            forecast_series: torch.Tensor
-            ) -> None:
-        """
-        For the simplicity of coding, last data will be dropped
-        """
-        batch_size = ground_truth_series.shape[1]
-        ground_truth_series_np = ground_truth_series.cpu().numpy()
-        forecast_series_np = forecast_series.cpu().numpy()
-        for i in range(batch_size):
-            self.all_ground_truth.append(ground_truth_series_np[0, i, 0])
-            for j in range(self.forecast_length):
-                self.all_forecast_guess[j].append(forecast_series_np[j, i, 0])
-
-        # Dropping last data
-        ## Ground truth is shorter than the forecast_guess
-        ## Cut the forecast guess to the length of the ground truth
-        ground_truth_length = len(self.all_ground_truth)
-        self.all_forecast_guess = [i[:ground_truth_length] for i in self.all_forecast_guess]
-        return
-    
-    def plot_forecast_vs_ground_truth(self, which_to_plot: Union[None, list] = None) -> None:
-        """
-        which_to_plot: accept a list that contains the forecast sequence user would like to plot,
-            Default: all
-            Usage example: [0, 3, 5] plot forecast sequence 0, 3, 5.
-        """
-        fig_name = f"{self.model_name}_prediction_trend"
-        # Create subfolder
-        working_dir = os.path.join(self.save_dir, fig_name)
-        create_folder_if_not_exists(working_dir)
-        # Get figure sequence
-        fig_sequence = self._get_plot_sequence(working_dir, fig_name)
-
-        # Create a figure and axis
-        fig, ax = plt.subplots()
-
-        # Plot the data
-        default_colors = ['#1f77b4', 
-                          '#ff7f0e', 
-                          '#2ca02c', 
-                          '#d62728', 
-                          '#9467bd', 
-                          '#8c564b', 
-                          '#e377c2',
-                          '#7f7f7f', 
-                          '#bcbd22', 
-                          '#17becf'
-                          ]
-        x_axis = range(len(self.all_ground_truth))
-        print(colored(f"Length of ground truth: {len(self.all_ground_truth)}", "green"))
-        print(colored(f"Length of forecast_guess: {len(self.all_forecast_guess[0])}", "green"))
-        ax.plot(x_axis, self.all_ground_truth, linewidth=2)
-        for i, c in zip(range(self.forecast_length), default_colors):
-            if which_to_plot == None:
-                pass
-            elif i not in which_to_plot:
-                continue
-            data = self.all_forecast_guess[i]
-            label = f"{i}-unit forecast line"
-            ax.plot(x_axis, data, linewidth=1, label=label, color=c, alpha=0.5)
-            
-        # Add labels and title
-        ax.set_xlabel('Time')
-        ax.set_ylabel('Data')
-        ax.set_title('Prediction Trend Plot')
-        plt.legend(loc="upper left")
-
-        # Add grid lines
-        ax.grid(True, linestyle='--', alpha=0.7)
-
-        # Customize the tick labels
-        ax.tick_params(axis='x', rotation=45)
-
-        # Add a background color
-        ax.set_facecolor('#F2F2F2')
-
-        # Remove the top and right spines
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-
-        # Add title
-        plt.title(" ".join(fig_name.split("_")))
-
-        # Show the plot
-        plt.savefig(
-            os.path.join(
-                working_dir, 
-                f"{fig_name}_{fig_sequence}.png"
-                ), 
-            dpi = 400)
-        plt.clf()
-        return
-    
-    def _get_plot_sequence(self, working_dir: str, fig_name: str) -> int:
-        """
-        See if there is already a plot there
-        """
-        max_sequence = -1
-
-        for filename in os.listdir(working_dir):
-            if filename.endswith('.png'):
-                # Extract the base name and sequence number from the file name
-                base, ext = os.path.splitext(filename)
-                parts = base.split('_')
-
-                if (len(parts) > 1 and '_'.join(parts[:-1]) == fig_name) or len(parts) == 1:
-                    # Extract the sequence number from the last part
-                    sequence_number = int(parts[-1])
-
-                    if sequence_number > max_sequence:
-                        max_sequence = sequence_number
-
-        new_sequence_number = max_sequence + 1
-
-        return new_sequence_number

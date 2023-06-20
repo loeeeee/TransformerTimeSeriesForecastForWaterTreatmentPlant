@@ -7,7 +7,7 @@ import inference # TODO: recode this
 
 from helper import console_general_data_info, create_folder_if_not_exists
 from torch_helper import get_best_device, TrackerLoss, TrackerEpoch
-from transformer import TimeSeriesTransformer, TransformerDataset, transformer_collate_fn
+from transformer import TimeSeriesTransformer, TransformerDataset, TransformerValidationVisualLogger, transformer_collate_fn
 
 import torch
 from torch import nn
@@ -158,9 +158,11 @@ def main() -> None:
     print(colored(f"Using {device} for training", "black", "on_green"), "\n")
 
     # HYPERPARAMETER
-    knowledge_length    = 24    # 4 hours
-    forecast_length     = 6     # 1 hour
-    batch_size          = 128    # 32 is pretty small
+    HYPERPARAMETER = {
+        "knowledge_length":     24,     # 4 hours
+        "forecast_length":      6,      # 1 hour
+        "batch_size":           128,    # 32 is pretty small
+    }
 
     # path = "/".join(INPUT_DATA.split('/')[:-1])
     # name = INPUT_DATA.split('/')[-1].split(".")[0]
@@ -175,8 +177,8 @@ def main() -> None:
         usecols = [1, 2, 3]
         )
 
-    #train = train.head(10000) # HACK Out of memory
-    #val = val.head(1000)
+    train = train.head(10000) # HACK Out of memory
+    val = val.head(1000)
 
     # Split data
     tgt_column = "line 1 pump speed"
@@ -216,25 +218,25 @@ def main() -> None:
     train_dataset = TransformerDataset(
         train_src,
         train_tgt,
-        knowledge_length,
-        forecast_length
+        HYPERPARAMETER["knowledge_length"],
+        HYPERPARAMETER["forecast_length"]
         )
     val_dataset = TransformerDataset(
         val_src,
         val_tgt,
-        knowledge_length,
-        forecast_length
+        HYPERPARAMETER["knowledge_length"],
+        HYPERPARAMETER["forecast_length"]
     )
     
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
-        batch_size,
+        HYPERPARAMETER["batch_size"],
         drop_last=True,
         collate_fn=transformer_collate_fn
     )
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
-        batch_size,
+        HYPERPARAMETER["batch_size"],
         drop_last=True,
         collate_fn=transformer_collate_fn
     )
@@ -268,6 +270,14 @@ def main() -> None:
     )
     t_epoch = TrackerEpoch(70)
     t_loss = TrackerLoss(5, model)
+    # Validation logger
+    val_logger = TransformerValidationVisualLogger(
+        MODEL_NAME,
+        WORKING_DIR,
+        meta_data = HYPERPARAMETER,
+        runtime_plotting = True,
+        which_to_plot = [0,int(HYPERPARAMETER["forecast_length"]/2), HYPERPARAMETER["forecast_length"]-1]
+    )
     print(colored("Training:", "black", "on_green"), "\n")
     with tqdm(total=t_epoch.max_epoch, unit="epoch", position=1) as bar:
         while True:
@@ -284,8 +294,8 @@ def main() -> None:
                     loss_fn, 
                     optimizer, 
                     device,
-                    forecast_length,
-                    knowledge_length
+                    HYPERPARAMETER["forecast_length"],
+                    HYPERPARAMETER["knowledge_length"]
                     )
                 break
                 """
@@ -294,8 +304,8 @@ def main() -> None:
                     loss_fn, 
                     optimizer, 
                     device,
-                    forecast_length,
-                    knowledge_length
+                    HYPERPARAMETER["forecast_length"],
+                    HYPERPARAMETER["knowledge_length"]
                 )
                 bar.refresh()
 
@@ -303,14 +313,13 @@ def main() -> None:
                     val_loader, 
                     loss_fn, 
                     device,
-                    forecast_length,
-                    knowledge_length, 
+                    HYPERPARAMETER["forecast_length"],
+                    HYPERPARAMETER["knowledge_length"], 
                     metrics,
                     WORKING_DIR,
-                    which_to_plot = [0,int(forecast_length/2), forecast_length-1],
-                    scaling_factors = [scaling_factors["average"].values[0], scaling_factors["stddev"].values[0]],
+                    val_logger = val_logger,
                     )
-
+                val_logger.plot()
                 scheduler_0.step()
                 scheduler_1.step()
                 scheduler_2.step(loss)
@@ -335,6 +344,8 @@ def main() -> None:
 
     save_model(model, WORKING_DIR)
     visualize_val_loss(t_loss, WORKING_DIR)
+    val_logger.save_data()
+    val_logger.plot()
     return
 
 if __name__ == "__main__":
