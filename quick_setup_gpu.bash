@@ -19,8 +19,7 @@ echo "Installing pytorch"
 pip3 install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu121
 
 echo "Installing package according to requirement"
-cat requirements_gpu.txt | xargs -n 1 pip install
+cat requirements-gpu.txt | xargs -n 1 pip install
 
-mkdir src
 mkdir data
 mkdir data/processed_norm
