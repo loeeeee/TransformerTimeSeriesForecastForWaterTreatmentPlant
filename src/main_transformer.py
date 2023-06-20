@@ -177,8 +177,8 @@ def main() -> None:
         usecols = [1, 2, 3]
         )
 
-    train = train.head(10000) # HACK Out of memory
-    val = val.head(1000)
+    #train = train.head(10000) # HACK Out of memory
+    # val = val.head(1000)
 
     # Split data
     tgt_column = "line 1 pump speed"
@@ -245,7 +245,8 @@ def main() -> None:
     model = TimeSeriesTransformer(
         input_feature_size,
         forecast_feature_size,
-        model_name = MODEL_NAME
+        model_name = MODEL_NAME,
+        embedding_dimension = 1024
     ).to(device)
     print(colored("Model structure:", "black", "on_green"), "\n")
     print(model)
@@ -259,7 +260,7 @@ def main() -> None:
     ## Optimizer
     lr = 0.0001  # learning rate
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.995)
+    scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
     scheduler_1 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer = optimizer,
         T_0 = 5,
@@ -268,8 +269,8 @@ def main() -> None:
         optimizer = optimizer,
         patience = 2,
     )
-    t_epoch = TrackerEpoch(70)
-    t_loss = TrackerLoss(5, model)
+    t_epoch = TrackerEpoch(100)
+    t_loss = TrackerLoss(-1, model)
     # Validation logger
     val_logger = TransformerValidationVisualLogger(
         MODEL_NAME,

@@ -133,11 +133,11 @@ class TransformerValidationVisualLogger:
         self.in_batch_ground_truth = []
         self.in_batch_forecast_guess = []
         # Start plotting
-        if self.runtime_plotting:
+        if not self.isFinished and self.runtime_plotting:
             self._plot_forecast_vs_ground_truth(
                 which_to_plot = self.which_to_plot,
             )
-        elif self.isFinished:
+        elif self.isFinished and not self.runtime_plotting:
             # Find y_min_max in both ground truth and forecast guess
             global_min = 0x3f3f3f3f
             global_max = -0x3f3f3f3f

@@ -66,11 +66,14 @@ class TrackerLoss:
 
     def check(self, loss, model) -> bool:
         """
-        If loss imporve in all epoch,
+        If loss improve in all epoch,
         If loss improve in previous epoch, but worse in recent ones,
         If loss worse in all epoch,
-        If loss worse in previous epoch, but imporve in recent ones
+        If loss worse in previous epoch, but improve in recent ones
         """
+        if self.patience == -1:
+            return True
+
         self.loss.append(loss)
         
         # When it is in early epoch

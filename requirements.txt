@@ -11,7 +11,6 @@ executing==1.2.0
 filelock==3.9.0
 fonttools==4.39.4
 idna==3.4
-intel-extension-for-pytorch==2.0.100+cpu
 ipykernel==6.23.1
 ipython==8.14.0
 jedi==0.18.2
@@ -56,7 +55,6 @@ sympy==1.11.1
 tabulate==0.9.0
 tb-nightly==2.14.0a20230608
 termcolor==2.3.0
-threadpoolctl==3.1.0
 torch==2.0.1+cpu
 torchaudio==2.0.2+cpu
 torchvision==0.15.2+cpu
