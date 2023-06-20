@@ -7,7 +7,7 @@ import inference # TODO: recode this
 
 from helper import console_general_data_info, create_folder_if_not_exists
 from torch_helper import get_best_device, TrackerLoss, TrackerEpoch
-from transformer import TimeSeriesTransformer, TransformerDataset, TransformerValidationVisualLogger, transformer_collate_fn
+from transformer import TimeSeriesTransformer, TransformerDataset, TransformerVisualLogger, transformer_collate_fn
 
 import torch
 from torch import nn
@@ -272,8 +272,15 @@ def main() -> None:
     t_epoch = TrackerEpoch(100)
     t_loss = TrackerLoss(-1, model)
     # Validation logger
-    val_logger = TransformerValidationVisualLogger(
-        MODEL_NAME,
+    train_logger = TransformerVisualLogger(
+        "train",
+        WORKING_DIR,
+        meta_data = HYPERPARAMETER,
+        runtime_plotting = True,
+        which_to_plot = [0,int(HYPERPARAMETER["forecast_length"]/2), HYPERPARAMETER["forecast_length"]-1]
+    )
+    val_logger = TransformerVisualLogger(
+        "val",
         WORKING_DIR,
         meta_data = HYPERPARAMETER,
         runtime_plotting = True,
@@ -306,8 +313,10 @@ def main() -> None:
                     optimizer, 
                     device,
                     HYPERPARAMETER["forecast_length"],
-                    HYPERPARAMETER["knowledge_length"]
+                    HYPERPARAMETER["knowledge_length"],
+                    vis_logger = train_logger,
                 )
+                train_logger.plot()
                 bar.refresh()
 
                 loss = model.val(
@@ -318,7 +327,7 @@ def main() -> None:
                     HYPERPARAMETER["knowledge_length"], 
                     metrics,
                     WORKING_DIR,
-                    val_logger = val_logger,
+                    vis_logger = val_logger,
                     )
                 val_logger.plot()
                 scheduler_0.step()
@@ -345,6 +354,8 @@ def main() -> None:
 
     save_model(model, WORKING_DIR)
     visualize_val_loss(t_loss, WORKING_DIR)
+    train_logger.save_data()
+    train_logger.plot()
     val_logger.save_data()
     val_logger.plot()
     return

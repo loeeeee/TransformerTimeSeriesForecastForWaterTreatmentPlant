@@ -16,13 +16,13 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
-class TransformerValidationVisualLogger:
+class TransformerVisualLogger:
     """
     Logging evaluation process for visualization
     If runtime_plotting is set to false, save_data must be called before calling plot.
     """
     def __init__(self, 
-                 model_name: str,
+                 name: str,
                  working_dir: str, 
                  meta_data: dict = {},
                  runtime_plotting: bool = True,
@@ -31,7 +31,7 @@ class TransformerValidationVisualLogger:
         """
         runtime_plotting: True means plot when a new data is added
         """
-        self.model_name = model_name
+        self.name = name
         self.working_dir = working_dir
         self.metadata = meta_data
         self.runtime_plotting = runtime_plotting
@@ -54,8 +54,8 @@ class TransformerValidationVisualLogger:
         forecast_length = ground_truth.shape[0]
         
         # Not necessary if only use cpu
-        ground_truth_series_np = ground_truth.cpu().numpy()
-        forecast_series_np = forecast_guess.cpu().numpy()
+        ground_truth_series_np = ground_truth.detach().clone().cpu().numpy()
+        forecast_series_np = forecast_guess.detach().clone().cpu().numpy()
 
         # Init in batch forecast guess
         if self.in_batch_forecast_guess == []:
@@ -84,7 +84,7 @@ class TransformerValidationVisualLogger:
             dir = self.working_dir
         else:
             dir = dir_overwrite
-        dir = os.path.join(dir, "validation_log")
+        dir = os.path.join(dir, self.name)
         create_folder_if_not_exists(dir)
 
         # Process data pair
@@ -114,7 +114,7 @@ class TransformerValidationVisualLogger:
         """
         Load from file
         """
-        dir = os.path.join(self.working_dir, "validation_log")
+        dir = os.path.join(self.working_dir, self.name)
         self.data_pair = pd.read_csv(
             os.path.join(
             dir, "data_pair.csv"
@@ -174,7 +174,7 @@ class TransformerValidationVisualLogger:
             Default: all
             Usage example: [0, 3, 5] plot forecast sequence 0, 3, 5.
         """
-        fig_name = f"{self.model_name}_prediction_trend"
+        fig_name = f"{self.name}_prediction_trend"
         # Create subfolder
         working_dir = os.path.join(
             self.working_dir, 
@@ -446,7 +446,9 @@ class TimeSeriesTransformer(nn.Module):
               optimizer: torch.optim,
               device: str,
               forecast_length: int,
-              knowledge_length: int) -> None:
+              knowledge_length: int,
+              vis_logger: Union[None, TransformerVisualLogger] = None,
+              ) -> None:
         # Start training
         self.train()
         # self, optimizer = ipex.optimize(self, optimizer=optimizer, dtype=torch.float32)
@@ -488,6 +490,10 @@ class TimeSeriesTransformer(nn.Module):
             # Take optimizer step
             optimizer.step()
 
+            # Add data to val_logger
+            if vis_logger != None:
+                vis_logger.append(tgt_y, prediction)
+
             bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(i+1)):.3f}", refresh=True)
             bar.update()
             # planned_obsolete(5)
@@ -502,7 +508,7 @@ class TimeSeriesTransformer(nn.Module):
             knowledge_length: int,
             metrics: list,
             working_dir: str,
-            val_logger: Union[None, TransformerValidationVisualLogger] = None,
+            vis_logger: Union[None, TransformerVisualLogger] = None,
             ) -> None:
         """
         Which to plot: receive a list that contains the forecast sequence needed to be plotted
@@ -533,8 +539,8 @@ class TimeSeriesTransformer(nn.Module):
                    device
                    )
                 
-                if val_logger != None:
-                    val_logger.append(tgt_y, pred)
+                if vis_logger != None:
+                    vis_logger.append(tgt_y, pred)
                 """
                 visualizer.add_data(
                     ground_truth_series = tgt_y,
