@@ -288,30 +288,12 @@ def normalization_and_scaling(data: pd.DataFrame) -> pd.DataFrame:
     print(colored("Normalization and scaling data", "green"))
     print()
     target_columns = data.columns.tolist()
-    target_columns.remove("line 1 pump speed")
-    target_columns.remove("line 2 pump speed")
-    target_columns.remove("PAC pump 1 speed")
-    target_columns.remove("PAC pump 2 speed")
     target_columns.remove("year")
     target_columns.remove("time_x")
     target_columns.remove("time_y")
     target_columns.remove("date_x")
     target_columns.remove("date_y")
 
-    for column in target_columns:
-        scaler = StandardScaler()
-        scaled_data = scaler.fit_transform(np.reshape(np.array(data[column]), (-1, 1)))
-        # transformer = PowerTransformer(method='yeo-johnson')
-        # mapped_data = transformer.fit_transform(scaled_data)
-        # data[column] = mapped_data
-        data[column] = scaled_data
-
-    target_columns = [
-        "line 1 pump speed",
-        "line 2 pump speed",
-        "PAC pump 1 speed",
-        "PAC pump 2 speed"
-    ]
     scaling_factors = []
     for column in target_columns:
         scaler = StandardScaler()
@@ -324,6 +306,7 @@ def normalization_and_scaling(data: pd.DataFrame) -> pd.DataFrame:
         scaling_factors, 
         columns = ["name", "average", "stddev"]
         )
+
     return data, scaling_factors
 
 def save_data_csv(path: str, 
