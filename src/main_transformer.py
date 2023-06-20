@@ -3,7 +3,6 @@ This transformer code works on the fully normalized input, and multiply the loss
 """
 import settings # Get config
 import utils # TODO: recode this
-import inference # TODO: recode this
 
 from helper import console_general_data_info, create_folder_if_not_exists
 from torch_helper import get_best_device, TrackerLoss, TrackerEpoch
@@ -177,7 +176,7 @@ def main() -> None:
         usecols = [1, 2, 3]
         )
 
-    #train = train.head(10000) # HACK Out of memory
+    # train = train.head(1000) # HACK Out of memory
     # val = val.head(1000)
 
     # Split data

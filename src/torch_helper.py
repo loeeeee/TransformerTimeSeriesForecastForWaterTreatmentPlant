@@ -1,15 +1,8 @@
 import torch
-from torch import nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 
 import pandas as pd
-import numpy as np
 
-from tqdm import tqdm
-from termcolor import colored
-
-import os
-import sys
 import copy
 
 
@@ -71,14 +64,12 @@ class TrackerLoss:
         If loss worse in all epoch,
         If loss worse in previous epoch, but improve in recent ones
         """
-        if self.patience == -1:
-            return True
-
         self.loss.append(loss)
         
         # When it is in early epoch
         if len(self.loss) <= 1:
             return True
+        
         self.loss_delta.append(self.loss[-1] - self.loss[-2])
 
         # When a good model is meet
@@ -91,6 +82,9 @@ class TrackerLoss:
         else:
             self.patience_left = self.patience
 
+        if self.patience == -1:
+            return True
+        
         return bool(self.patience_left)
 
     def get_best_model(self):

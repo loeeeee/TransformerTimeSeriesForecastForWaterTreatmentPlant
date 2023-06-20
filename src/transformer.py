@@ -1,5 +1,4 @@
 import os
-import re
 import math
 import utils
 import inference
@@ -8,9 +7,8 @@ import torch
 from torch import nn
 
 from tqdm import tqdm
-from termcolor import colored
 from typing import Tuple, Union
-from helper import planned_obsolete, create_folder_if_not_exists
+from helper import create_folder_if_not_exists
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -54,8 +52,8 @@ class TransformerVisualLogger:
         forecast_length = ground_truth.shape[0]
         
         # Not necessary if only use cpu
-        ground_truth_series_np = ground_truth.detach().clone().cpu().numpy()
-        forecast_series_np = forecast_guess.detach().clone().cpu().numpy()
+        ground_truth_series_np = ground_truth.detach().clone().cpu().tolist()
+        forecast_series_np = forecast_guess.detach().clone().cpu().tolist()
 
         # Init in batch forecast guess
         if self.in_batch_forecast_guess == []:
@@ -63,9 +61,9 @@ class TransformerVisualLogger:
         
         # Organize data
         for i in range(batch_size):
-            self.in_batch_ground_truth.append(ground_truth_series_np[0, i, 0])
+            self.in_batch_ground_truth.append(ground_truth_series_np[0][i][0])
             for j in range(forecast_length):
-                self.in_batch_forecast_guess[j].append(forecast_series_np[j, i, 0])
+                self.in_batch_forecast_guess[j].append(forecast_series_np[j][i][0])
 
         # Dropping last data
         ## Ground truth is shorter than the forecast_guess
@@ -239,7 +237,7 @@ class TransformerVisualLogger:
         plt.savefig(
             os.path.join(
                 working_dir, 
-                f"{fig_name}_{fig_sequence}.png"
+                f"{fig_name}_{fig_sequence}.svg"
                 ), 
             dpi = 400)
         plt.clf()
@@ -516,7 +514,7 @@ class TimeSeriesTransformer(nn.Module):
         """
         num_batches = len(dataloader)
         size = len(dataloader.dataset)
-        # visualizer = TransformerVisualizer(forecast_length, working_dir, self.model_name)
+
         # Start evaluation
         self.eval()
 
@@ -541,12 +539,6 @@ class TimeSeriesTransformer(nn.Module):
                 
                 if vis_logger != None:
                     vis_logger.append(tgt_y, pred)
-                """
-                visualizer.add_data(
-                    ground_truth_series = tgt_y,
-                    forecast_series     = pred,
-                    )
-                """
 
                 # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {pred.shape}\n")
                 test_loss += loss_fn(pred, tgt_y).item()
@@ -563,7 +555,6 @@ class TimeSeriesTransformer(nn.Module):
             name = str(type(additional_monitor))[8:-2].split(".")[-1]
             loss = additional_loss[str(type(additional_monitor))] / num_batches
             tqdm.write(f" {name}: {loss:>8f}")
-        # visualizer.plot_forecast_vs_ground_truth(which_to_plot)
         tqdm.write("\n")
         return test_loss
     
