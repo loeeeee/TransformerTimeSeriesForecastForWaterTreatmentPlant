@@ -15,15 +15,13 @@ import copy
 
 
 class GenericDataFrameDataset(Dataset):
-    def __init__(self, X: pd.DataFrame, y: pd.DataFrame, transform=None, target_transform=None):
+    def __init__(self, X: torch.Tensor, y: torch.Tensor, transform=None, target_transform=None):
         """
         X is a DataFrame
         y is a DataFrame
         """
-        self.X = torch.tensor(X.values, dtype = torch.float32)
-        self.y = torch.tensor(y.values, dtype = torch.float32).unsqueeze(1)
-        self.transform = transform
-        self.target_transform = target_transform
+        self.X = X
+        self.y = y
 
     def __len__(self) -> int:
         return len(self.y)
