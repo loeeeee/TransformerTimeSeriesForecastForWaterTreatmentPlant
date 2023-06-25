@@ -1,33 +1,7 @@
-import os
-import numpy as np
-from torch import nn, Tensor
 from typing import Optional, Any, Union, Callable, Tuple
-import torch
 import pandas as pd
 from pathlib import Path
-
-
-def generate_square_subsequent_mask(dim1: int, dim2: int) -> Tensor:
-    """
-    Generates an upper-triangular matrix of -inf, with zeros on diag.
-    Modified from: 
-    https://pytorch.org/tutorials/beginner/transformer_tutorial.html
-
-    Args:
-
-        dim1: int, for both src and tgt masking, this must be target sequence
-              length
-
-        dim2: int, for src masking this must be encoder sequence length (i.e. 
-              the length of the input sequence to the model), 
-              and for tgt masking, this must be target sequence length 
-
-
-    Return:
-
-        A Tensor of shape [dim1, dim2]
-    """
-    return torch.triu(torch.ones(dim1, dim2) * float('-inf'), diagonal=1)
+from helper import *
 
 
 def get_indices_input_target(num_obs, input_len, step_size, forecast_horizon, target_len):
@@ -182,34 +156,4 @@ def read_data(data_dir: Union[str, Path] = "data",
 
     return data
 
-def is_ne_in_df(df:pd.DataFrame):
-    """
-    Some raw data files contain cells with "n/e". This function checks whether
-    any column in a df contains a cell with "n/e". Returns False if no columns
-    contain "n/e", True otherwise
-    """
-    
-    for col in df.columns:
 
-        true_bool = (df[col] == "n/e")
-
-        if any(true_bool):
-            return True
-
-    return False
-
-
-def to_numeric_and_downcast_data(df: pd.DataFrame):
-    """
-    Downcast columns in df to smallest possible version of it's existing data
-    type
-    """
-    fcols = df.select_dtypes('float').columns
-    
-    icols = df.select_dtypes('integer').columns
-
-    df[fcols] = df[fcols].apply(pd.to_numeric, downcast='float')
-    
-    df[icols] = df[icols].apply(pd.to_numeric, downcast='integer')
-
-    return df

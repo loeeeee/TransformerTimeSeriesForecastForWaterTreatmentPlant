@@ -13,7 +13,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from helper import console_general_data_info
 
 INPUT_DATA = sys.argv[1]
-VISUAL_DIR = os.environ["VISUAL_DIR"]
+VISUAL_DIR = settings.VISUAL_DIR
 
 def kernel_pca_gif() -> None:
     # Load csv
@@ -57,7 +57,7 @@ def kernel_pca_gif() -> None:
         ax.scatter(_sub_df['PC1'], _sub_df['PC2'], _sub_df['PC3'], color=colors[i], label=i, alpha=0.3)
     plt.xlabel('Principal Component 1')
     plt.ylabel('Principal Component 2')
-    plt.title('Kernal PCA Results')
+    plt.title('Kernel PCA Results')
     plt.savefig(f"{VISUAL_DIR}/kernel_PCA.png", dpi=300)
     # Moving PCA
     PCA_gif_dir = f"{VISUAL_DIR}/kernel_PCA_gif"

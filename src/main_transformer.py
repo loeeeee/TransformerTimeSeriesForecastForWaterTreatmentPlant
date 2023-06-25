@@ -4,8 +4,7 @@ This transformer code works on the fully normalized input, and multiply the loss
 import settings # Get config
 import utils # TODO: recode this
 
-from helper import console_general_data_info, create_folder_if_not_exists
-from torch_helper import get_best_device, TrackerLoss, TrackerEpoch
+from helper import *
 from transformer import TimeSeriesTransformer, TransformerDataset, TransformerVisualLogger, transformer_collate_fn
 
 import torch
@@ -13,14 +12,12 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 import pandas as pd
-import matplotlib.pyplot as plt
 
 from tqdm import tqdm
 from termcolor import colored
 from datetime import datetime
 
 import os
-import re
 import sys
 
 INPUT_DATA = sys.argv[1]
@@ -33,9 +30,9 @@ except IndexError:
     # Format the timestamp as YY-MM-DD-HH-MM
     formatted_time = current_time.strftime("%y-%m-%d-%H-%M")
     MODEL_NAME = f"trans_{formatted_time}"
-VISUAL_DIR = os.environ["VISUAL_DIR"]
-DATA_DIR = os.environ["DATA_DIR"]
-MODEL_DIR = os.environ["MODEL_DIR"]
+VISUAL_DIR = settings.VISUAL_DIR
+DATA_DIR = settings.DATA_DIR
+MODEL_DIR = settings.MODEL_DIR
 
 # Create working dir
 WORKING_DIR = os.path.join(MODEL_DIR, MODEL_NAME)
@@ -53,6 +50,9 @@ def train_test(dataloader: DataLoader,
                device: str,
                forecast_length: int,
                knowledge_length: int) -> None:
+    """
+    Only for the purpose of debugging
+    """
     tqdm.write(f"Length of the dataloader: {len(dataloader)}")
     bar = tqdm(total=len(dataloader), position=1)
     for i, (src, tgt, tgt_y) in enumerate(dataloader):
@@ -72,61 +72,6 @@ def train_test(dataloader: DataLoader,
         tqdm.write(f"tgt_mask shape: {tgt_mask.shape}\nsrc_mask: {src_mask.shape}\n")
         bar.update()
     bar.close()
-    return
-
-def load_data(path, name) -> pd.DataFrame:
-    """
-    Load data, return a DataFrame
-    """
-    regex = f'.*{name}.*\.csv$'  # Regular expression pattern to match the user input in the CSV file name
-    pattern = re.compile(regex)
-
-    file_dir = None
-    for root, dirs, files in os.walk(path):
-        for file in files:
-            if re.match(pattern, file):
-                file_dir = os.path.join(root, file)
-                file_dir = os.path.abspath(file_dir)
-                break
-
-    if file_dir == None:
-        raise FileNotFoundError
-
-    print(colored(f"Loading {file_dir}", "green"))
-    data = pd.read_csv(file_dir,
-                       index_col=0,
-                       low_memory=False,
-                       parse_dates=["timestamp"]
-                    )
-    print()
-    
-    # Make sure all "n/e" values have been removed from df. 
-    if utils.is_ne_in_df(data):
-        raise ValueError("data frame contains 'n/e' values. These must be handled")
-
-    data = utils.to_numeric_and_downcast_data(data)
-
-    # Make sure data is in ascending order by timestamp
-    data.sort_values(by=["timestamp"], inplace=True)
-
-    return data
-
-def save_model(model: nn.Module, root_saving_dir: str) -> None:
-    print(f"Save data to {root_saving_dir}")
-    save_dir = os.path.join(root_saving_dir, model.model_name)
-    torch.save(model.state_dict(), f"{save_dir}.pt")
-    return
-
-def visualize_val_loss(t_loss: TrackerLoss, root_saving_dir: str) -> None:
-    # Visualize training process
-    loss_history = t_loss.get_loss_history()
-    fig_name = f"{MODEL_NAME}_loss_history"
-    plt.plot(range(len(loss_history)), loss_history)
-    plt.title(fig_name)
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss (MSE)")
-    plt.figtext(0, 0, f"Minimum loss: {t_loss.lowest_loss}", color="#a41095")
-    plt.savefig(os.path.join(root_saving_dir, f"{fig_name}.png"), dpi=300)
     return
 
 """
@@ -352,7 +297,7 @@ def main() -> None:
     print(colored(f"The best model has the validation loss of {t_loss.lowest_loss}", "cyan"))
 
     save_model(model, WORKING_DIR)
-    visualize_val_loss(t_loss, WORKING_DIR)
+    visualize_val_loss(t_loss, WORKING_DIR, MODEL_NAME)
     train_logger.save_data()
     train_logger.plot()
     val_logger.save_data()

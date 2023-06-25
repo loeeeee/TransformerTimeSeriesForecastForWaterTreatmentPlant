@@ -1,8 +1,12 @@
-from __future__ import annotations
-
 import json
 import os
 
+ROOT_DIR = ""
+DATA_DIR = ""
+CONFIG_DIR = ""
+VISUAL_DIR = ""
+SRC_DIR = ""
+MODEL_DIR = ""
 
 def main() -> None:
     print("[INFO] Settings: Start initializing.")
@@ -12,39 +16,38 @@ def main() -> None:
     )  # just in case some one what to modify this
 
     check_and_create_dir(DEFAULT_CONFIG_DIR)
-    env_vars = read_from_config_file(DEFAULT_CONFIG_DIR)
+    vars = read_from_config_file(DEFAULT_CONFIG_DIR)
     default_env_vars = generate_default_values(DEFAULT_CONFIG_DIR)
 
-    if not env_vars:  # No file was found, use default one
-        env_vars = default_env_vars
+    if not vars:  # No file was found, use default one
+        vars = default_env_vars
     else:  # If found, use the found one, and check them
-        env_vars = env_list_integrity_check(default_env_vars, env_vars)
+        vars = env_list_integrity_check(default_env_vars, vars)
 
-    save_to_config_file(DEFAULT_CONFIG_DIR, env_vars)  # Save change to config
-    apply_env_from_list(env_vars)
+    save_to_config_file(DEFAULT_CONFIG_DIR, vars)  # Save change to config
+    apply_env_from_list(vars)
 
     print("[INFO] Settings: Finish initializing.")
-    return
+    return vars
 
 
 # subprocess
 
-
 def generate_default_values(DEFAULT_CONFIG_DIR):
     # generate default value and write to file
-    env_vars = {}
+    vars = {}
 
-    env_vars["ROOT_DIR"] = (
+    vars["ROOT_DIR"] = (
         os.path.dirname(os.path.realpath(__file__)) + "/../"
     )  # Root means the repo root
-    env_vars["DATA_DIR"] = os.path.join(env_vars["ROOT_DIR"], "data/")
-    env_vars["CONFIG_DIR"] = DEFAULT_CONFIG_DIR
-    env_vars["VISUAL_DIR"] = os.path.join(env_vars["ROOT_DIR"], "visual/")
-    env_vars["SRC_DIR"] = os.path.join(env_vars["ROOT_DIR"], "src/")
-    env_vars["MODEL_DIR"] = os.path.join(env_vars["ROOT_DIR"], "model/")
+    vars["DATA_DIR"] = os.path.join(vars["ROOT_DIR"], "data/")
+    vars["CONFIG_DIR"] = DEFAULT_CONFIG_DIR
+    vars["VISUAL_DIR"] = os.path.join(vars["ROOT_DIR"], "visual/")
+    vars["SRC_DIR"] = os.path.join(vars["ROOT_DIR"], "src/")
+    vars["MODEL_DIR"] = os.path.join(vars["ROOT_DIR"], "model/")
     # env_vars["ROOT_DIR"] =
 
-    return env_vars
+    return vars
 
 
 def read_from_config_file(CONFIG_DIR):
@@ -70,7 +73,6 @@ def apply_env_from_list(env_var_list):
     check_and_create_dir(env_var_list["VISUAL_DIR"])
     # Loading actual value
     for key, value in env_var_list.items():
-        os.environ[key] = value
         print("[INFO] Settings: %s - %s" % (key, value))
     return
 
@@ -104,8 +106,6 @@ def save_to_config_file(DIR, CONTENT):
 
 
 # helper
-
-
 def check_and_create_dir(DIR):
     isExist = os.path.exists(DIR)
     if not isExist:
@@ -128,10 +128,16 @@ def check_and_create_dir(DIR):
     return
 
 
-isRun = False
+isAlreadyExecuted = False
 if __name__ == "__main__":
     main()
 else:
-    if not isRun:
-        main()
-        isRun = True
+    if not isAlreadyExecuted:
+        vars = main()
+        ROOT_DIR    = vars["ROOT_DIR"]
+        DATA_DIR    = vars["DATA_DIR"]
+        CONFIG_DIR  = vars["CONFIG_DIR"]
+        VISUAL_DIR  = vars["VISUAL_DIR"]
+        SRC_DIR     = vars["SRC_DIR"]
+        MODEL_DIR   = vars["MODEL_DIR"]
+        isAlreadyExecuted = True

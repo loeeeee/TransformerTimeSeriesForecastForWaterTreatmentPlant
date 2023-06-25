@@ -5,7 +5,6 @@ import sys
 import math
 
 from tqdm import tqdm
-from typing import Union
 from termcolor import colored
 
 import pandas as pd
@@ -14,14 +13,14 @@ import seaborn as sns
 import tabulate as tb
 import matplotlib.pyplot as plt
 
-from sklearn.preprocessing import StandardScaler, PowerTransformer
+from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 
-from helper import console_general_data_info, create_folder_if_not_exists
+from helper import console_general_data_info, create_folder_if_not_exists, new_remove
 
 INPUT_DATA = sys.argv[1]
-VISUAL_DIR = os.environ["VISUAL_DIR"]
-DATA_DIR = os.environ["DATA_DIR"]
+VISUAL_DIR = settings.VISUAL_DIR
+DATA_DIR = settings.DATA_DIR
 
 train_test_split_config = {
     "test_size": 0.1,
@@ -57,10 +56,10 @@ def visual_data_distribution(saving_dir: str, data: pd.DataFrame) -> None:
         bar.update()
     return
 
-def visualize_variance(data: pd.DataFrame) -> None:
-    # calculate the variance
-    target_columns = data.columns.tolist()
-    target_columns.remove("timestamp")
+def visualize_variance(
+        data: pd.DataFrame,
+        target_columns: list,
+        ) -> None:
     header = ["Feature",
               "Average",
               "Variance",
@@ -118,16 +117,11 @@ def visualize_correlation(data: pd.DataFrame) -> None:
    
     # data =  data.drop(columns = ["f4", "f18", "f12"])
 
-def visualize_data_trend(data: pd.DataFrame) -> None:
-    for i in data:
-        fig_name = "data_trend"
-        # Create subfolder
-        working_dir = os.path.join(
-            VISUAL_DIR, 
-            fig_name
-            )
-        create_folder_if_not_exists(working_dir)
+def visualize_data_trend(name: str, data: pd.DataFrame) -> None:
+    working_dir = os.path.join(VISUAL_DIR, name)
+    create_folder_if_not_exists(working_dir)
 
+    for i in data:
         # Create a figure and axis
         fig, ax = plt.subplots()
 
@@ -153,7 +147,7 @@ def visualize_data_trend(data: pd.DataFrame) -> None:
         ax.spines['right'].set_visible(False)
 
         # Add title
-        plt.title(" ".join(fig_name.split("_")))
+        plt.title(" ".join(i.split("_")))
 
         # Show the plot
         plt.savefig(
@@ -217,6 +211,7 @@ def fill_zeros(data: pd.DataFrame) -> pd.DataFrame:
     
     for column in target_columns:
         # Find all the zero sequence
+        ## zero_sequence: [(start_index: int, length of the zero sequence: int)]
         zero_sequences = []
         cnt = 0
         start_index = 0
@@ -236,8 +231,11 @@ def fill_zeros(data: pd.DataFrame) -> pd.DataFrame:
         print(colored(f"{column} has {len(zero_sequences)} zero sequence,", "green"))
         print(tb.tabulate(zero_sequences, ["Starting index", "Length"]))
         # Drop zero sequence that is longer than 50
-        # Fill in the zero sequence using polyfit
+        for start_index, cnt in zero_sequences:
+            
+            pass
 
+        # Fill in the zero sequence using polyfit
         for starting_index, length in zero_sequences:
             important_columns = ["timestamp", column]
             target_length = 10
@@ -274,9 +272,9 @@ def fill_zeros(data: pd.DataFrame) -> pd.DataFrame:
             unknown_sequence.loc[:, "timestamp"] = pd.to_datetime(unknown_sequence["timestamp"], format=time_format)
             unknown_sequence.loc[:, "time"] = [int((t - starting_time).total_seconds()) for t in unknown_sequence["timestamp"]]
             # polyfit the sequence
-            p = np.polyfit(known_sequence["time"].values, known_sequence[column].values, 1)
+            parameters = np.polyfit(known_sequence["time"].values, known_sequence[column].values, 1)
             # Estimate the unknown
-            guess = np.polyval(p, unknown_sequence.loc[:, "time"])
+            guess = np.polyval(parameters, unknown_sequence.loc[:, "time"])
             # print(f"Guess {guess}")
             # Put the sequence back
             data.iloc[starting_index:starting_index + length, data.columns.get_loc(column)] = guess
@@ -400,11 +398,12 @@ def main() -> None:
     
     # Drop zeros
     print(colored("Data property before processing:", "green"))
-    visualize_variance(data)
+    visualize_variance(data, new_remove(data.columns.tolist(), "timestamp"))
     data = drop_zeros(data)
     print(colored("Data property after processing:", "green"))
-    visualize_variance(data)
-    visual_data_distribution("data_distribution_dropped", data.drop(columns=["timestamp"]))
+    visualize_variance(data, new_remove(data.columns.tolist(), "timestamp"))
+    visual_data_distribution("data_distribution_after_dropping", data.drop(columns=["timestamp"]))
+    visualize_data_trend("data_trend_after_dropping", data)
     
     """
     Notes on the basic column information
@@ -430,15 +429,16 @@ def main() -> None:
     data = fill_zeros(data)
     print(colored("Double check if the fill zero process is successful.", "green"))
     visualize_count_zeros(data)
-    visualize_variance(data)
+    visualize_variance(data, new_remove(data.columns.tolist(), "timestamp"))
+    visualize_data_trend("data_trend_after_filled", data)
 
     # Add more data
     console_general_data_info(data)
     data = create_more_data(data)
     visualize_correlation(data)
     console_general_data_info(data)
-    visual_data_distribution("data_distribution_filled", data)
-    visualize_data_trend(data)
+    visual_data_distribution("data_distribution_after_creation", data)
+    visualize_data_trend("data_trend_after_creation", data)
 
     # Saving data
     save_data_csv(DATA_DIR, 
@@ -451,6 +451,7 @@ def main() -> None:
     data, scaling_factors = normalization_and_scaling(data)
     console_general_data_info(data)
     console_general_data_info(scaling_factors)
+    visualize_variance(data, data.columns.tolist())
     visual_data_distribution("data_distribution_normed", data)
     
     # Saving data
