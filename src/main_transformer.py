@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 import pandas as pd
 
 from tqdm import tqdm
-from termcolor import colored
+from termcolor import colored, cprint
 from datetime import datetime
 
 import os
@@ -41,6 +41,22 @@ create_folder_if_not_exists(WORKING_DIR)
 print(colored(f"Read from {INPUT_DATA}", "black", "on_green"))
 print(colored(f"Save all files to {WORKING_DIR}", "black", "on_green"))
 print()
+
+# HYPERPARAMETER
+HYPERPARAMETER = {
+    "knowledge_length":     24,     # 4 hours
+    "forecast_length":      6,      # 1 hour
+    "batch_size":           32,    # 32 is pretty small
+}
+Y_COLUMNS = [
+    "line 1 pump speed",
+    "line 2 pump speed",
+    "PAC pump 1 speed",
+    "PAC pump 2 speed",
+]
+TGT_COLUMNS = "line 1 pump speed"
+INPUT_FEATURE_SIZE = 16
+FORECAST_FEATURE_SIZE = 1
 
 # Subprocess
 def train_test(dataloader: DataLoader,
@@ -74,6 +90,86 @@ def train_test(dataloader: DataLoader,
     bar.close()
     return
 
+def csv_to_loader(
+        csv_dir: str,
+        ) -> torch.utils.data.DataLoader:
+    # Read csv
+    data = pd.read_csv(
+        csv_dir,
+        low_memory=False,
+        index_col=0,
+        parse_dates=["timestamp"],
+    )
+    
+    # Downcast data
+    data = to_numeric_and_downcast_data(data)
+    
+    # Make sure data is in ascending order by timestamp
+    data.sort_values(by=["timestamp"], inplace=True)
+    
+    # Split data
+    src = data.drop(
+        columns=Y_COLUMNS
+    )
+    tgt = data[TGT_COLUMNS]
+
+    # Drop data that is too short for the prediction
+    if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"]:
+        raise Exception
+    
+    src = torch.tensor(src.values)
+    tgt = torch.tensor(tgt.values).unsqueeze(1)
+    
+    dataset = TransformerDataset(
+        src,
+        tgt,
+        HYPERPARAMETER["knowledge_length"],
+        HYPERPARAMETER["forecast_length"]
+        )
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        HYPERPARAMETER["batch_size"],
+        drop_last=False,
+        collate_fn=transformer_collate_fn
+    )
+    return loader
+
+def load(path: str, train_val_split: float=0.8) -> list:
+    csv_files = []
+    pattern = re.compile(r'\d+')
+
+    # Iterate over all files in the directory
+    for filename in os.listdir(path):
+        if filename.endswith('.csv'):
+            csv_files.append(filename)
+
+    # Sort the CSV files based on the numbers in their filenames
+    csv_files.sort(key=lambda x: int(pattern.search(x).group()))
+    
+    if len(csv_files) == 0:
+        raise FileNotFoundError
+    
+    # Compose train loader
+    train = []
+    for csv_file in csv_files[:int(len(csv_files)*train_val_split)]:
+        current_csv = os.path.join(path, csv_file)
+        try:
+            train.append(csv_to_loader(current_csv))
+        except Exception:
+            continue
+
+    # Compose validation loader
+    val = []
+    for csv_file in csv_files[int(len(csv_files)*train_val_split):]:
+        current_csv = os.path.join(path, csv_file)
+        try:
+            val.append(csv_to_loader(current_csv))
+        except Exception:
+            continue
+    
+    return train, val
+
 """
 year                          int8
 date_x                     float32
@@ -101,94 +197,15 @@ def main() -> None:
     device = get_best_device()
     print(colored(f"Using {device} for training", "black", "on_green"), "\n")
 
-    # HYPERPARAMETER
-    HYPERPARAMETER = {
-        "knowledge_length":     24,     # 4 hours
-        "forecast_length":      6,      # 1 hour
-        "batch_size":           128,    # 32 is pretty small
-    }
-
     # path = "/".join(INPUT_DATA.split('/')[:-1])
     # name = INPUT_DATA.split('/')[-1].split(".")[0]
 
-    train = load_data(INPUT_DATA, "train")
-    val = load_data(INPUT_DATA, "val")
-    console_general_data_info(train)
-    # Add scaling factors, it for explanation of the model
-    scaling_factors = pd.read_csv(
-        os.path.join(INPUT_DATA, "scaling_factors.csv"),
-        index_col = 0,
-        usecols = [1, 2, 3]
-        )
-
-    # train = train.head(1000) # HACK Out of memory
-    # val = val.head(1000)
-
-    # Split data
-    tgt_column = "line 1 pump speed"
-    train_src = train.drop(columns=[
-        "line 1 pump speed",
-        "line 2 pump speed",
-        "PAC pump 1 speed",
-        "PAC pump 2 speed",
-    ])
-    train_tgt = train[tgt_column]
-    val_src = val.drop(columns=[
-        "line 1 pump speed",
-        "line 2 pump speed",
-        "PAC pump 1 speed",
-        "PAC pump 2 speed",
-    ])
-    val_tgt = val[tgt_column]
-    scaling_factors = scaling_factors.loc[[tgt_column]]
-
-    # Convert data to Tensor object
-    train_src = torch.tensor(train_src.values)
-    train_tgt = torch.tensor(train_tgt.values).unsqueeze(1)
-    val_src = torch.tensor(val_src.values)
-    val_tgt = torch.tensor(val_tgt.values).unsqueeze(1)
-    ## Check the tensor data type
-    print(colored("Check tensor data type", "green"))
-    print(f"train_src data type: {train_src.dtype}")
-    print(f"train_tgt data type: {train_tgt.dtype}")
-    print(f"val_src data type: {val_src.dtype}")
-    print(f"val_tgt data type: {val_tgt.dtype}\n")
-
-
-    # Context based variable
-    input_feature_size = train_src.shape[1]
-    forecast_feature_size = train_tgt.shape[1]
-
-    train_dataset = TransformerDataset(
-        train_src,
-        train_tgt,
-        HYPERPARAMETER["knowledge_length"],
-        HYPERPARAMETER["forecast_length"]
-        )
-    val_dataset = TransformerDataset(
-        val_src,
-        val_tgt,
-        HYPERPARAMETER["knowledge_length"],
-        HYPERPARAMETER["forecast_length"]
-    )
-    
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
-        HYPERPARAMETER["batch_size"],
-        drop_last=True,
-        collate_fn=transformer_collate_fn
-    )
-    val_loader = torch.utils.data.DataLoader(
-        val_dataset,
-        HYPERPARAMETER["batch_size"],
-        drop_last=True,
-        collate_fn=transformer_collate_fn
-    )
+    train_loaders, val_loaders = load(INPUT_DATA)
 
     # Model
     model = TimeSeriesTransformer(
-        input_feature_size,
-        forecast_feature_size,
+        INPUT_FEATURE_SIZE,
+        FORECAST_FEATURE_SIZE,
         model_name = MODEL_NAME,
         embedding_dimension = 1024
     ).to(device)
@@ -251,28 +268,31 @@ def main() -> None:
                     )
                 break
                 """
-                model.learn(
-                    train_loader, 
-                    loss_fn, 
-                    optimizer, 
-                    device,
-                    HYPERPARAMETER["forecast_length"],
-                    HYPERPARAMETER["knowledge_length"],
-                    vis_logger = train_logger,
-                )
+                for train_loader in train_loaders:
+                    model.learn(
+                        train_loader, 
+                        loss_fn, 
+                        optimizer, 
+                        device,
+                        HYPERPARAMETER["forecast_length"],
+                        HYPERPARAMETER["knowledge_length"],
+                        vis_logger = train_logger,
+                    )
                 train_logger.plot()
                 bar.refresh()
 
-                loss = model.val(
-                    val_loader, 
-                    loss_fn, 
-                    device,
-                    HYPERPARAMETER["forecast_length"],
-                    HYPERPARAMETER["knowledge_length"], 
-                    metrics,
-                    WORKING_DIR,
-                    vis_logger = val_logger,
-                    )
+                loss = 0
+                for val_loader in val_loaders:
+                    loss += model.val(
+                        val_loader, 
+                        loss_fn, 
+                        device,
+                        HYPERPARAMETER["forecast_length"],
+                        HYPERPARAMETER["knowledge_length"], 
+                        metrics,
+                        WORKING_DIR,
+                        vis_logger = val_logger,
+                        )
                 val_logger.plot()
                 scheduler_0.step()
                 scheduler_1.step()

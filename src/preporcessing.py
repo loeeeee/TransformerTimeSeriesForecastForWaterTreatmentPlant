@@ -5,7 +5,8 @@ import sys
 import math
 
 from tqdm import tqdm
-from termcolor import colored
+from datetime import timedelta
+from termcolor import colored, cprint
 
 import pandas as pd
 import numpy as np
@@ -384,16 +385,45 @@ def save_data_csv(path: str,
     print()
     return
 
+def split_data(data: pd.DataFrame) -> list[pd.DataFrame]:
+    """
+    The subprocess split data into multiple dataframe based on the time delta
+    """
+    data.sort_values(by=["timestamp"], inplace=True)
+    # Get the time delta
+    data = data.reset_index(names="timestamp")
+    data["timedelta"] = data["timestamp"].diff()
+    # Convert the time delta column to minutes
+    data['time_delta_minutes'] = data['timedelta'].astype('timedelta64[s]')
+
+    normal_timedelta = np.timedelta64(10, 'm')
+    # Filter the DataFrame for time deltas equal to 10 minutes (600s)
+    data = data[data['time_delta_minutes'] == normal_timedelta]
+
+    data = data.drop(columns=["timedelta", "time_delta_minutes"])
+
+    console_general_data_info(data)
+
+    # Split data into multiple section
+    data["timedelta"] = data["timestamp"].diff()
+    ## Find the indices where the time difference is greater than 10 minutes
+    split_indices = data.index[data["timedelta"] > pd.Timedelta(minutes=10)]
+    ## Split the DataFrame into multiple DataFrames based on the split indices
+    data = data.drop(columns=["timedelta"])
+    dfs = np.split(data, split_indices)
+    # Remove excessive information
+    return dfs
+
 def main() -> None:
     # Load csv
+    cprint("Loading csv.", color="black", on_color="on_cyan", attrs=["blink"])
     data = pd.read_csv(INPUT_DATA, 
                        index_col=0, 
                        parse_dates=[1],
                        date_format="%Y/%m/%d %I:%M %p"
                        )
-    
     console_general_data_info(data)
-    # Raw data distribution
+    ## Raw data distribution
     visual_data_distribution("data_distribution_raw", data.drop(columns=["timestamp"]))
     
     # Drop zeros
@@ -425,6 +455,7 @@ def main() -> None:
     """
 
     # Fill zeros
+    cprint("Filling zeros.", color="black", on_color="on_cyan", attrs=["blink"])
     visualize_count_zeros(data)
     data = fill_zeros(data)
     print(colored("Double check if the fill zero process is successful.", "green"))
@@ -433,6 +464,7 @@ def main() -> None:
     visualize_data_trend("data_trend_after_filled", data)
 
     # Add more data
+    cprint("Adding more data.", color="black", on_color="on_cyan", attrs=["blink"])
     console_general_data_info(data)
     data = create_more_data(data)
     visualize_correlation(data)
@@ -440,14 +472,8 @@ def main() -> None:
     visual_data_distribution("data_distribution_after_creation", data)
     visualize_data_trend("data_trend_after_creation", data)
 
-    # Saving data
-    save_data_csv(DATA_DIR, 
-                  "processed", 
-                  data, 
-                  split=True, 
-                  **train_test_split_config)
-
     # Normalization and scaling data
+    cprint("Normalizing and scaling data.", color="black", on_color="on_cyan", attrs=["blink"])
     data, scaling_factors = normalization_and_scaling(data)
     console_general_data_info(data)
     console_general_data_info(scaling_factors)
@@ -455,14 +481,34 @@ def main() -> None:
     visual_data_distribution("data_distribution_normed", data)
     
     # Saving data
+    cprint("Saving data.", color="black", on_color="on_cyan", attrs=["blink"])
     save_data_csv(DATA_DIR,
-                  "processed_norm", 
+                  "processed", 
                   data, 
                   split=True, 
                   **train_test_split_config)
     scaling_factors.to_csv(
-        os.path.join(DATA_DIR, "processed_norm/scaling_factors.csv"),
+        os.path.join(DATA_DIR, "processed/scaling_factors.csv"),
     )
+
+    # Split data
+    cprint("Splitting data.", color="black", on_color="on_cyan", attrs=["blink"])
+    data_segments = split_data(data)
+    
+    # Save split data
+    working_dir = os.path.join(DATA_DIR, "segmented_data")
+    create_folder_if_not_exists(working_dir)
+    bar = tqdm(total=len(data_segments), desc=colored("Saving data", color="green", attrs=["blink"]))
+    for index, data in enumerate(data_segments):
+        data = data.reset_index(drop=True)
+        data = data.set_index("timestamp")
+        data.to_csv(
+            os.path.join(
+                working_dir, f"seg_{index}.csv"
+            )
+        )
+        bar.update()
+    bar.close()
     return
 
 if __name__ == "__main__":
