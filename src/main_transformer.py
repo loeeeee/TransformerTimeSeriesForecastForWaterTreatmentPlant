@@ -46,7 +46,7 @@ print()
 HYPERPARAMETER = {
     "knowledge_length":     24,     # 4 hours
     "forecast_length":      6,      # 1 hour
-    "batch_size":           32,    # 32 is pretty small
+    "batch_size":           128,    # 32 is pretty small
 }
 Y_COLUMNS = [
     "line 1 pump speed",
@@ -115,6 +115,7 @@ def csv_to_loader(
 
     # Drop data that is too short for the prediction
     if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"]:
+        print(f"Drop {colored(csv_dir, 'red' )}")
         raise Exception
     
     src = torch.tensor(src.values)
@@ -248,7 +249,7 @@ def main() -> None:
         which_to_plot = [0,int(HYPERPARAMETER["forecast_length"]/2), HYPERPARAMETER["forecast_length"]-1]
     )
     print(colored("Training:", "black", "on_green"), "\n")
-    with tqdm(total=t_epoch.max_epoch, unit="epoch", position=1) as bar:
+    with tqdm(total=t_epoch.max_epoch, unit="epoch", position=0) as bar:
         while True:
             try:
                 lr = scheduler_0.get_last_lr()[0]
@@ -268,31 +269,28 @@ def main() -> None:
                     )
                 break
                 """
-                for train_loader in train_loaders:
-                    model.learn(
-                        train_loader, 
-                        loss_fn, 
-                        optimizer, 
-                        device,
-                        HYPERPARAMETER["forecast_length"],
-                        HYPERPARAMETER["knowledge_length"],
-                        vis_logger = train_logger,
-                    )
+                model.learn(
+                    train_loaders, 
+                    loss_fn, 
+                    optimizer, 
+                    device,
+                    HYPERPARAMETER["forecast_length"],
+                    HYPERPARAMETER["knowledge_length"],
+                    vis_logger = train_logger,
+                )
                 train_logger.plot()
                 bar.refresh()
 
-                loss = 0
-                for val_loader in val_loaders:
-                    loss += model.val(
-                        val_loader, 
-                        loss_fn, 
-                        device,
-                        HYPERPARAMETER["forecast_length"],
-                        HYPERPARAMETER["knowledge_length"], 
-                        metrics,
-                        WORKING_DIR,
-                        vis_logger = val_logger,
-                        )
+                loss = model.val(
+                    val_loaders, 
+                    loss_fn, 
+                    device,
+                    HYPERPARAMETER["forecast_length"],
+                    HYPERPARAMETER["knowledge_length"], 
+                    metrics,
+                    WORKING_DIR,
+                    vis_logger = val_logger,
+                    )
                 val_logger.plot()
                 scheduler_0.step()
                 scheduler_1.step()

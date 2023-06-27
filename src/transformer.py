@@ -593,7 +593,7 @@ class TimeSeriesTransformer(nn.Module):
         return forecast
     
     def learn(self,
-              dataloader: torch.utils.data.DataLoader,
+              dataloaders: list[torch.utils.data.DataLoader],
               loss_fn: any,
               optimizer: torch.optim,
               device: str,
@@ -603,9 +603,9 @@ class TimeSeriesTransformer(nn.Module):
               ) -> None:
         # Start training
         self.train()
-        # self, optimizer = ipex.optimize(self, optimizer=optimizer, dtype=torch.float32)
 
-        bar = tqdm(total=len(dataloader), position=0)
+        total_length = sum([len(dataloader) for dataloader in dataloaders])
+        bar = tqdm(total=total_length, position=1)
         total_loss = 0
         # Generate masks
         src_mask = generate_square_subsequent_mask(
@@ -619,41 +619,40 @@ class TimeSeriesTransformer(nn.Module):
             dim1=forecast_length,
             dim2=forecast_length
             ).to(device)
-        # for idx, row in enumerate(tgt_mask):
-        #     tqdm.write(f"tgt_mask line {str(idx).zfill(2)}: {row}")
             
         # tqdm.write(f"tgt_mask shape: {tgt_mask.shape}\nsrc_mask: {src_mask.shape}\n")
-        for i, (src, tgt, tgt_y) in enumerate(dataloader):
-            src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
+        for dataloader in dataloaders:
+            for i, (src, tgt, tgt_y) in enumerate(dataloader):
+                src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
 
-            # zero the parameter gradients
-            optimizer.zero_grad()
+                # zero the parameter gradients
+                optimizer.zero_grad()
 
-            # Make forecasts
-            prediction = self(src, tgt, src_mask, tgt_mask)
+                # Make forecasts
+                prediction = self(src, tgt, src_mask, tgt_mask)
 
-            # Compute and backprop loss
-            # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {prediction.shape}\n")
-            loss = loss_fn(tgt_y, prediction)
-            total_loss += loss.item()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+                # Compute and backprop loss
+                # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {prediction.shape}\n")
+                loss = loss_fn(tgt_y, prediction)
+                total_loss += loss.item()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
 
-            # Take optimizer step
-            optimizer.step()
+                # Take optimizer step
+                optimizer.step()
 
-            # Add data to val_logger
-            if vis_logger != None:
-                vis_logger.append(tgt_y, prediction)
+                # Add data to val_logger
+                if vis_logger != None:
+                    vis_logger.append(tgt_y, prediction)
 
-            bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(i+1)):.3f}", refresh=True)
-            bar.update()
-            # planned_obsolete(5)
+                bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(i+1)):.3f}", refresh=True)
+                bar.update()
+                # planned_obsolete(5)
         bar.close()
         return
     
     def val(self,
-            dataloader: torch.utils.data.DataLoader,
+            dataloaders: list[torch.utils.data.DataLoader],
             loss_fn: any,
             device: str,
             forecast_length: int,
@@ -666,8 +665,7 @@ class TimeSeriesTransformer(nn.Module):
         Which to plot: receive a list that contains the forecast sequence needed to be plotted
         scaler: receive a tuple, (average, stddev). The scaler is used to reproduce original values, instead of the normalized ones.
         """
-        num_batches = len(dataloader)
-        size = len(dataloader.dataset)
+        total_batches = sum([len(dataloader) for dataloader in dataloaders])
 
         # Start evaluation
         self.eval()
@@ -679,35 +677,36 @@ class TimeSeriesTransformer(nn.Module):
         with torch.no_grad():
             test_loss = 0
             correct = 0
-            bar = tqdm(total=len(dataloader), position=0)
-            for i, (src, tgt, tgt_y) in enumerate(dataloader):
-                src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
-                # tqdm.write(f"{src.shape}, {tgt.shape}, {tgt_y.shape}")
-                pred = run_encoder_decoder_inference(
-                   self, 
-                   src, 
-                   forecast_length,
-                   src.shape[1],
-                   device
-                   )
-                
-                if vis_logger != None:
-                    vis_logger.append(tgt_y, pred)
+            bar = tqdm(total=total_batches, position=1)
+            for dataloader in dataloaders:
+                for i, (src, tgt, tgt_y) in enumerate(dataloader):
+                    src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
+                    # tqdm.write(f"{src.shape}, {tgt.shape}, {tgt_y.shape}")
+                    pred = run_encoder_decoder_inference(
+                       self, 
+                       src, 
+                       forecast_length,
+                       src.shape[1],
+                       device
+                       )
 
-                # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {pred.shape}\n")
-                test_loss += loss_fn(pred, tgt_y).item()
-                correct += (pred == tgt_y).type(torch.float).sum().item()
-                for additional_monitor in metrics:
-                    additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
-                bar.update()
-                bar.set_description(desc=f"Loss: {(test_loss/(1+i)):.3f}", refresh=True)
+                    if vis_logger != None:
+                        vis_logger.append(tgt_y, pred)
+
+                    # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {pred.shape}\n")
+                    test_loss += loss_fn(pred, tgt_y).item()
+                    correct += (pred == tgt_y).type(torch.float).sum().item()
+                    for additional_monitor in metrics:
+                        additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
+                    bar.update()
+                    bar.set_description(desc=f"Loss: {(test_loss/(1+i)):.3f}", refresh=True)
             bar.close()
-        test_loss /= num_batches
-        correct /= size
+        test_loss /= total_batches
+        correct /= total_batches
         tqdm.write(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} ")
         for additional_monitor in metrics:
             name = str(type(additional_monitor))[8:-2].split(".")[-1]
-            loss = additional_loss[str(type(additional_monitor))] / num_batches
+            loss = additional_loss[str(type(additional_monitor))] / total_batches
             tqdm.write(f" {name}: {loss:>8f}")
         tqdm.write("\n")
         return test_loss
