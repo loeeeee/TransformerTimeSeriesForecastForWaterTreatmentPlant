@@ -208,7 +208,7 @@ def main() -> None:
         INPUT_FEATURE_SIZE,
         FORECAST_FEATURE_SIZE,
         model_name = MODEL_NAME,
-        embedding_dimension = 1024
+        embedding_dimension = 512
     ).to(device)
     print(colored("Model structure:", "black", "on_green"), "\n")
     print(model)
@@ -233,6 +233,7 @@ def main() -> None:
     )
     t_epoch = TrackerEpoch(100)
     t_loss = TrackerLoss(-1, model)
+    t_train_loss = TrackerLoss(-1, model)
     # Validation logger
     train_logger = TransformerVisualLogger(
         "train",
@@ -269,7 +270,7 @@ def main() -> None:
                     )
                 break
                 """
-                model.learn(
+                train_loss = model.learn(
                     train_loaders, 
                     loss_fn, 
                     optimizer, 
@@ -281,7 +282,7 @@ def main() -> None:
                 train_logger.plot()
                 bar.refresh()
 
-                loss = model.val(
+                val_loss = model.val(
                     val_loaders, 
                     loss_fn, 
                     device,
@@ -294,13 +295,16 @@ def main() -> None:
                 val_logger.plot()
                 scheduler_0.step()
                 scheduler_1.step()
-                scheduler_2.step(loss)
+                # scheduler_2.step(val_loss)
 
-                if not t_loss.check(loss, model):
-                    tqdm.write(colored("Loss no longer decrease, finish training", "green", "on_red"))
+                if not t_loss.check(val_loss, model):
+                    tqdm.write(colored("Validation loss no longer decrease, finish training", "green", "on_red"))
                     break
                 if not t_epoch.check():
                     tqdm.write(colored("Maximum epoch reached. Finish training", "green", "on_red"))
+                    break
+                if not t_train_loss.check(train_loss, model):
+                    tqdm.write(colored("Training loss no longer decrease, finish training", "green", "on_red"))
                     break
                 bar.update()
             except KeyboardInterrupt:
@@ -313,8 +317,12 @@ def main() -> None:
     # Bring back the best known model
     model = t_loss.get_best_model()
     print(colored(f"The best model has the validation loss of {t_loss.lowest_loss}", "cyan"))
+    model_best_train = t_train_loss.get_best_model()
+    model_best_train.model_name += "_best_trained"
+    cprint(f"Best trained model has an train loss of {t_train_loss.lowest_loss}", "cyan")
 
     save_model(model, WORKING_DIR)
+    save_model(model_best_train, WORKING_DIR)
     visualize_val_loss(t_loss, WORKING_DIR, MODEL_NAME)
     train_logger.save_data()
     train_logger.plot()

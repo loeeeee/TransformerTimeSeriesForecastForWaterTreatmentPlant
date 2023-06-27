@@ -600,27 +600,30 @@ class TimeSeriesTransformer(nn.Module):
               forecast_length: int,
               knowledge_length: int,
               vis_logger: Union[None, TransformerVisualLogger] = None,
-              ) -> None:
+              ) -> float:
+        """
+        Return the loss of the training
+        """
         # Start training
         self.train()
 
+        # Metadata
         total_length = sum([len(dataloader) for dataloader in dataloaders])
         bar = tqdm(total=total_length, position=1)
         total_loss = 0
+
         # Generate masks
         src_mask = generate_square_subsequent_mask(
             dim1=forecast_length,
             dim2=knowledge_length
             ).to(device)
-        # for idx, row in enumerate(src_mask):
-        #     tqdm.write(f"src_mask line {str(idx).zfill(2)}: {row}")
         
         tgt_mask = generate_square_subsequent_mask(
             dim1=forecast_length,
             dim2=forecast_length
             ).to(device)
-            
-        # tqdm.write(f"tgt_mask shape: {tgt_mask.shape}\nsrc_mask: {src_mask.shape}\n")
+        
+        # Iterate through dataloaders
         for dataloader in dataloaders:
             for i, (src, tgt, tgt_y) in enumerate(dataloader):
                 src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
@@ -647,9 +650,10 @@ class TimeSeriesTransformer(nn.Module):
 
                 bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(i+1)):.3f}", refresh=True)
                 bar.update()
-                # planned_obsolete(5)
+        
         bar.close()
-        return
+
+        return total_loss/total_length
     
     def val(self,
             dataloaders: list[torch.utils.data.DataLoader],
@@ -660,11 +664,13 @@ class TimeSeriesTransformer(nn.Module):
             metrics: list,
             working_dir: str,
             vis_logger: Union[None, TransformerVisualLogger] = None,
-            ) -> None:
+            ) -> float:
         """
         Which to plot: receive a list that contains the forecast sequence needed to be plotted
         scaler: receive a tuple, (average, stddev). The scaler is used to reproduce original values, instead of the normalized ones.
+        Return the loss of validation
         """
+        # Metadata
         total_batches = sum([len(dataloader) for dataloader in dataloaders])
 
         # Start evaluation
@@ -674,6 +680,7 @@ class TimeSeriesTransformer(nn.Module):
         for additional_monitor in metrics:
             additional_loss[str(type(additional_monitor))] = 0
 
+        # Validation
         with torch.no_grad():
             test_loss = 0
             correct = 0
@@ -703,12 +710,15 @@ class TimeSeriesTransformer(nn.Module):
             bar.close()
         test_loss /= total_batches
         correct /= total_batches
+        
+        # Report
         tqdm.write(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} ")
         for additional_monitor in metrics:
             name = str(type(additional_monitor))[8:-2].split(".")[-1]
             loss = additional_loss[str(type(additional_monitor))] / total_batches
             tqdm.write(f" {name}: {loss:>8f}")
         tqdm.write("\n")
+
         return test_loss
     
 
