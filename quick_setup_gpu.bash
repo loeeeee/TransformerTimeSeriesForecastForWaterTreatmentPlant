@@ -3,10 +3,16 @@
 working_dir = $( cd "$(dirname "${BASH_SOURCE[0]}")" ; pwd -P )
 cd "$working_dir"
 
+# Prompt for sudo password
+read -sp "Enter your sudo password: " sudo_password
+echo ""
+
+# Update package lists and install python3-venv
 echo "Install python"
-apt install python3.11-venv
-apt install python3-pip
-apt install python-is-python3
+echo $sudo_password | sudo -S apt update
+echo $sudo_password | sudo -S apt install python3.11-venv
+echo $sudo_password | sudo -S apt install python3-pip
+echo $sudo_password | sudo -S apt install python-is-python3
 
 echo "Installing venv"
 pip install virtualenv
