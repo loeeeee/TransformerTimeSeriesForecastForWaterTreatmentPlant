@@ -211,7 +211,7 @@ def new_remove(input_list: list, sth_to_remove: Union[str, int, float, bool]) ->
     input_list.remove(sth_to_remove)
     return input_list
 
-def visualize_val_loss(t_loss: TrackerLoss, root_saving_dir: str, model_name: str) -> None:
+def visualize_loss(t_loss: TrackerLoss, root_saving_dir: str, model_name: str) -> None:
     # Visualize training process
     loss_history = t_loss.get_loss_history()
     fig_name = f"{model_name}_loss_history"

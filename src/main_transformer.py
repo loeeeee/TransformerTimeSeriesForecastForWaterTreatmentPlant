@@ -323,7 +323,8 @@ def main() -> None:
 
     save_model(model, WORKING_DIR)
     save_model(model_best_train, WORKING_DIR)
-    visualize_val_loss(t_loss, WORKING_DIR, MODEL_NAME)
+    visualize_loss(t_loss, WORKING_DIR, f"{MODEL_NAME}_val")
+    visualize_loss(t_train_loss, WORKING_DIR, f"{MODEL_NAME}_train")
     train_logger.save_data()
     train_logger.plot()
     val_logger.save_data()
