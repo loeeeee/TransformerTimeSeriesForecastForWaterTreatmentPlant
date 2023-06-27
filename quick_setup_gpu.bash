@@ -15,7 +15,6 @@ echo $sudo_password | sudo -S apt install python3-pip
 echo $sudo_password | sudo -S apt install python-is-python3
 
 echo "Installing venv"
-pip install virtualenv
 python3 -m venv .env
 
 echo "Starting python environment"
