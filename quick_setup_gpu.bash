@@ -7,12 +7,19 @@ cd "$working_dir"
 read -sp "Enter your sudo password: " sudo_password
 echo ""
 
+# Check Python version
+python_version=$(python -V 2>&1 | awk '{print $2}')
+if [[ $python_version =~ ^2\. ]]; then
+    echo "Python 2 is not supported. Please install Python 3."
+    exit 1
+fi
+
 # Update package lists and install python3-venv
 echo "Install python"
-echo $sudo_password | sudo -S apt update
-echo $sudo_password | sudo -S apt install python3.11-venv
-echo $sudo_password | sudo -S apt install python3-pip
-echo $sudo_password | sudo -S apt install python-is-python3
+echo $sudo_password | sudo apt update
+echo $sudo_password | sudo apt install -y python3-venv
+echo $sudo_password | sudo apt install -y python3-pip
+echo $sudo_password | sudo apt install -y python-is-python3
 
 echo "Installing venv"
 python3 -m venv .env
