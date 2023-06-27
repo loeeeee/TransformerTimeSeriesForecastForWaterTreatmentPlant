@@ -390,10 +390,10 @@ class TransformerVisualLogger:
         plt.savefig(
             os.path.join(
                 working_dir, 
-                f"{fig_name}_{fig_sequence}.svg"
+                f"{fig_name}_{fig_sequence}.png"
                 ), 
-            dpi = 400,
-            format = "svg")
+            dpi = 1000,
+            format = "png")
         plt.clf()
         plt.close()
         return
