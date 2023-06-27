@@ -1,7 +1,7 @@
 #!/bin/bash
 
-working_dir = $( cd "$(dirname "${BASH_SOURCE[0]}")" ; pwd -P )
-cd "$working_dir"
+# Change directory to the location of the script
+cd "$(dirname "$0")"
 
 # Prompt for sudo password
 read -sp "Enter your sudo password: " sudo_password
