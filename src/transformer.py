@@ -420,14 +420,15 @@ class TransformerVisualLogger:
         create_folder_if_not_exists(working_dir)
 
         # Plotting
-        fig_name = f"{self.name}_prediction_trend"
+        basename = f"{self.name}_prediction_trend"
         for dataloader_truth_and_guess in self._truth_guess_per_epoch[idx]:
             # Get figure sequence
             fig_sequence = self._get_plot_sequence(
                 working_dir, 
-                fig_name
+                basename
                 )
-            fig_name = f"{fig_name}_{str(fig_sequence).zfill(3)}"
+            fig_name = f"{basename}_{str(fig_sequence).zfill(3)}"
+            cprint(f"Name: {fig_name} \nFig sequence: {fig_sequence}", "green")
             
             # Call the plotting function
             self._plot_truth_vs_guess(
@@ -521,17 +522,17 @@ class TransformerVisualLogger:
         max_sequence = -1
 
         for filename in os.listdir(working_dir):
-            if filename.endswith('.png'):
-                # Extract the base name and sequence number from the file name
-                base, ext = os.path.splitext(filename)
-                parts = base.split('_')
+            base, ext = os.path.splitext(filename)
 
-                if (len(parts) > 1 and '_'.join(parts[:-1]) == fig_name) or len(parts) == 1:
-                    # Extract the sequence number from the last part
-                    sequence_number = int(parts[-1])
-
-                    if sequence_number > max_sequence:
-                        max_sequence = sequence_number
+            # Extract the base name and sequence number from the file name
+            parts = base.split('_')
+            
+            # Extract the sequence number from the last part
+            sequence_number = int(parts[-1])
+            cprint(f"sequence number: {sequence_number} \npart: {parts}", "green")
+            
+            if sequence_number > max_sequence:
+                max_sequence = sequence_number
 
         new_sequence_number = max_sequence + 1
 
