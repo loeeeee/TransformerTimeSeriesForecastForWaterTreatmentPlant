@@ -454,7 +454,7 @@ class TransformerVisualLogger:
         """
         # Get data
         ground_truth, forecast_guess = truth_and_guess.get()
-        cprint(f"Length: {len(ground_truth)}} \n{len(forecast_guess)}\n", "green")
+        cprint(f"Length: {len(ground_truth)} \n{len(forecast_guess)}\n", "green")
 
         # Create a figure and axis
         fig, ax = plt.subplots()
