@@ -8,6 +8,7 @@ from torch import nn
 from tqdm import tqdm
 from typing import Tuple, Union
 from helper import create_folder_if_not_exists
+from termcolor import colored, cprint
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -250,17 +251,7 @@ class TransformerVisualLogger:
             self.working_dir, 
             subdir_name
             )
-        create_folder_if_not_exists(working_dir)
-
-    def append(self, 
-               ground_truth, 
-               forecast_guess
-               ) -> None:
-        """
-        Add data pair to the runtime storage
-        """
-        self._truth_guess_per_dataloader[-1].append(ground_truth, forecast_guess)
-        return
+        create_folder_if_not_exists(self.working_dir)
 
     def save_data(self, dir_overwrite: str = "") -> None:
         """
@@ -332,6 +323,17 @@ class TransformerVisualLogger:
         )
         return
     
+    def append(self, 
+               ground_truth, 
+               forecast_guess
+               ) -> None:
+        """
+        Add data pair to the runtime storage
+        """
+        # This append is a custom append of TransformerTruthAndGuess
+        self._truth_guess_per_dataloader[-1].append(ground_truth, forecast_guess)
+        return
+    
     def signal_new_dataloader(self) -> None:
         """
         Signal a segment for the later plotting,
@@ -346,8 +348,9 @@ class TransformerVisualLogger:
         Because signal_new_epoch not only plots, but also reorganize data, and signal a new epoch.
         """
         # Organize data
+        self._truth_guess_per_dataloader.pop(-1) # Remove the last unused TransformerTruthAndGuess
         self._truth_guess_per_epoch.append(self._truth_guess_per_dataloader)
-        self._truth_guess_per_dataloader = []
+        self._truth_guess_per_dataloader = [TransformerTruthAndGuess()]
 
         # Start plotting
         if not self.isFinished and self.runtime_plotting:
@@ -418,26 +421,25 @@ class TransformerVisualLogger:
 
         # Plotting
         fig_name = f"{self.name}_prediction_trend"
-        for all_dataloaders_truth_and_guess in self._truth_guess_per_epoch[idx]:
-            for truth_and_guess in all_dataloaders_truth_and_guess:
-                # Get figure sequence
-                fig_sequence = self._get_plot_sequence(
-                    working_dir, 
-                    fig_name
-                    )
-                fig_name = f"{fig_name}_{str(fig_sequence).zfill(3)}"
-
-                # Call the plotting function
-                self._plot_truth_vs_guess_new(
-                    fig_name,
-                    working_dir,
-                    truth_and_guess,
-                    which_to_plot=which_to_plot,
-                    y_min_max=y_min_max,
+        for dataloader_truth_and_guess in self._truth_guess_per_epoch[idx]:
+            # Get figure sequence
+            fig_sequence = self._get_plot_sequence(
+                working_dir, 
+                fig_name
                 )
+            fig_name = f"{fig_name}_{str(fig_sequence).zfill(3)}"
+            
+            # Call the plotting function
+            self._plot_truth_vs_guess(
+                fig_name,
+                working_dir,
+                dataloader_truth_and_guess,
+                which_to_plot=which_to_plot,
+                y_min_max=y_min_max,
+            )
         return
     
-    def _plot_truth_vs_guess_new(self,
+    def _plot_truth_vs_guess(self,
                                  figure_name: str,
                                  working_dir: str,
                                  truth_and_guess: TransformerTruthAndGuess,
@@ -769,6 +771,7 @@ class TimeSeriesTransformer(nn.Module):
 
                 bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(i+1)):.3f}", refresh=True)
                 bar.update()
+            vis_logger.signal_new_dataloader()
         
         bar.close()
 
@@ -826,6 +829,7 @@ class TimeSeriesTransformer(nn.Module):
                         additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
                     bar.update()
                     bar.set_description(desc=f"Loss: {(test_loss/(1+i)):.3f}", refresh=True)
+                vis_logger.signal_new_dataloader()
             bar.close()
         test_loss /= total_batches
         correct /= total_batches
