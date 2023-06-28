@@ -1,5 +1,6 @@
 import os
 import math
+import json
 
 import torch
 from torch import nn
@@ -167,6 +168,52 @@ def generate_square_subsequent_mask(dim1: int, dim2: int) -> torch.Tensor:
     return torch.triu(torch.ones(dim1, dim2) * float('-inf'), diagonal=1)
 
 
+class TransformerTruthAndGuess:
+    def __init__(self) -> None:
+        """
+        This class is mainly for limiting the scope of the data, reducing the complexity of the Transformer Visual Logger.
+        This should store one segment of data, or in other words, one dataloader amount of data.
+        """
+        self._ground_truth = []
+        self._forecast_guess = []
+        
+    def append(self, truth: torch.tensor, guess: torch.tensor) -> None:
+        """
+        Add one batch worth of data to the object
+        """
+        # Metadata
+        batch_size = truth.shape[1]
+        forecast_length = truth.shape[0]
+        
+        # Not necessary if only use cpu
+        truth = truth.detach().clone().cpu().tolist()
+        guess = guess.detach().clone().cpu().tolist()
+
+        # Init in batch forecast guess
+        if self._forecast_guess == []:
+            self._forecast_guess = [[] for i in range(forecast_length)]
+        
+        # Organize data
+        for i in range(batch_size):
+            self._ground_truth.append(truth[0][i][0])
+            for j in range(forecast_length):
+                self._forecast_guess[j].append(guess[j][i][0])
+
+        # Dropping last data
+        ## Ground truth is shorter than the forecast_guess
+        ## Cut the forecast guess to the length of the ground truth
+        ground_truth_length = len(self._ground_truth)
+        self._forecast_guess = [i[:ground_truth_length] for i in self._forecast_guess]
+        return
+    
+    def get(self) -> tuple:
+        """
+        Return the (ground_truth, forecast_guess) data pair when called.
+        When no index is passed, default being the last pair
+        """
+        return self._ground_truth, self._forecast_guess
+
+
 class TransformerVisualLogger:
     """
     Logging evaluation process for visualization
@@ -180,6 +227,7 @@ class TransformerVisualLogger:
                  which_to_plot: Union[None, list] = None,
                  ) -> None:
         """
+        name: Name of the logger, will be used for names for the folder, do not duplicate the name with other loggers
         runtime_plotting: True means plot when a new data is added
         """
         self.name = name
@@ -188,10 +236,21 @@ class TransformerVisualLogger:
         self.runtime_plotting = runtime_plotting
         self.which_to_plot = which_to_plot
         self.isFinished = False
+        self.epoch_cnt = 0 # Epoch counter is only used when the runtime plotting is set to True
 
-        self.in_batch_ground_truth = []
-        self.in_batch_forecast_guess = []
-        self.data_pair = []
+        # Truth Guess is stored in the transformer prediction and truth object
+        self._truth_guess_per_dataloader = [TransformerTruthAndGuess()]
+        # After one epoch, the above _truth_guess_per_dataloader will be append into _truth_guess_per_epoch, and then emptied
+        self._truth_guess_per_epoch = []
+
+        # Create subfolder to store all the plot
+        subdir_name = f"{self.name}_prediction_trend"
+        # Update the working directory
+        self.working_dir = os.path.join(
+            self.working_dir, 
+            subdir_name
+            )
+        create_folder_if_not_exists(working_dir)
 
     def append(self, 
                ground_truth, 
@@ -200,30 +259,7 @@ class TransformerVisualLogger:
         """
         Add data pair to the runtime storage
         """
-        # Metadata
-        batch_size = ground_truth.shape[1]
-        forecast_length = ground_truth.shape[0]
-        
-        # Not necessary if only use cpu
-        ground_truth_series_np = ground_truth.detach().clone().cpu().tolist()
-        forecast_series_np = forecast_guess.detach().clone().cpu().tolist()
-
-        # Init in batch forecast guess
-        if self.in_batch_forecast_guess == []:
-            self.in_batch_forecast_guess = [[] for i in range(forecast_length)]
-        
-        # Organize data
-        for i in range(batch_size):
-            self.in_batch_ground_truth.append(ground_truth_series_np[0][i][0])
-            for j in range(forecast_length):
-                self.in_batch_forecast_guess[j].append(forecast_series_np[j][i][0])
-
-        # Dropping last data
-        ## Ground truth is shorter than the forecast_guess
-        ## Cut the forecast guess to the length of the ground truth
-        ground_truth_length = len(self.in_batch_ground_truth)
-        self.in_batch_forecast_guess = [i[:ground_truth_length] for i in self.in_batch_forecast_guess]
-
+        self._truth_guess_per_dataloader[-1].append(ground_truth, forecast_guess)
         return
 
     def save_data(self, dir_overwrite: str = "") -> None:
@@ -238,14 +274,18 @@ class TransformerVisualLogger:
         dir = os.path.join(dir, self.name)
         create_folder_if_not_exists(dir)
 
-        # Process data pair
-        data_pair = pd.DataFrame(
-            self.data_pair,
-            columns = ["ground_truth", "forecast_guess"],
-        )
-        data_pair.to_csv(
-            os.path.join(dir, "data_pair.csv"),
-        )
+        # Unzipping data
+        unzipped_data = [
+            [
+                dataloader_data.get()
+                for dataloader_data in epoch_data
+            ] 
+            for epoch_data in self._truth_guess_per_epoch
+        ]
+        
+        data_file_path = os.path.join(dir, "truth&guess.json")
+        with open(data_file_path, "w", buffering=16384, encoding="utf-8") as f:
+            json.dump(unzipped_data, f)
 
         # Process meta data
         metadata = pd.DataFrame(
@@ -265,12 +305,26 @@ class TransformerVisualLogger:
         """
         Load from file
         """
+        # Find working dir
         dir = os.path.join(self.working_dir, self.name)
-        self.data_pair = pd.read_csv(
-            os.path.join(
-            dir, "data_pair.csv"
-            )
-        )
+
+        # Read data
+        data_file_path = os.path.join(dir, "truth&guess.json")
+        with open(data_file_path, "w", buffering=16384, encoding="utf-8") as f:
+            unzipped_data = json.load(f)
+        
+        # Zipping data into original format
+        self._truth_guess_per_epoch = [
+            [
+                TransformerTruthAndGuess().append(
+                    (dataloader_data[0], dataloader_data[1])
+                )
+                for dataloader_data in epoch_data
+            ] 
+            for epoch_data in unzipped_data
+        ]
+
+        # Load metadata
         self.metadata = pd.read_csv(
             os.path.join(
             dir, "metadata.csv"
@@ -278,65 +332,125 @@ class TransformerVisualLogger:
         )
         return
     
-    def plot(self) -> None:
+    def signal_new_dataloader(self) -> None:
+        """
+        Signal a segment for the later plotting,
+        It creates a new Transformer Prediction and Truth object
+        """
+        self._truth_guess_per_dataloader.append(TransformerTruthAndGuess())
+        return
+    
+    def signal_new_epoch(self) -> None:
+        """
+        signal_new_epoch should be called at the end of the epoch, no matter if the runtime plot is set to True or False.
+        Because signal_new_epoch not only plots, but also reorganize data, and signal a new epoch.
+        """
         # Organize data
-        self.data_pair.append((self.in_batch_ground_truth, self.in_batch_forecast_guess))
-        self.in_batch_ground_truth = []
-        self.in_batch_forecast_guess = []
+        self._truth_guess_per_epoch.append(self._truth_guess_per_dataloader)
+        self._truth_guess_per_dataloader = []
+
         # Start plotting
         if not self.isFinished and self.runtime_plotting:
-            self._plot_forecast_vs_ground_truth(
+            self._plot_truth_vs_guess_init(
+                idx = self.epoch_cnt,
                 which_to_plot = self.which_to_plot,
             )
+            self.epoch_cnt += 1
         elif self.isFinished and not self.runtime_plotting:
             # Find y_min_max in both ground truth and forecast guess
-            global_min = 0x3f3f3f3f
-            global_max = -0x3f3f3f3f
-            for ground, forecast in self.data_pair:
-                y_min_0 = self._find_minimum_value(forecast)
-                y_max_0 = self._find_maximum_value(forecast)
-                y_min_1 = min(*[i for i in ground])
-                y_max_1 = max(*[i for i in ground])
-                y_min = min(y_min_0, y_min_1)
-                y_max = max(y_max_0, y_max_1)
-                if y_min < global_min:
-                    global_min = y_min
-                if y_max > global_max:
-                    global_max = y_max
-            y_min_max = (
-                global_min,
-                global_max
-            )
-            for i in range(len(self.data_pair)):
-                self._plot_forecast_vs_ground_truth(
+            global_min = []
+            global_max = []
+            for epoch_data in self._truth_guess_per_epoch:
+                # Find the minimum and maximum of the value
+                """
+                Data structure of TransformerTruthAndGuess.get()
+                (
+                []: truth,
+                [[]]: guess
+                )
+                """
+                truth_min = min(
+                    [(lambda x: min(x.get()[0]))(dataloader_data) 
+                     for dataloader_data in epoch_data]
+                    )
+                guess_min = min(
+                    [(lambda x: self._find_minimum_value(x.get()[1]))(dataloader_data) 
+                     for dataloader_data in epoch_data]
+                    )
+                truth_max = max(
+                    [(lambda x: max(x.get()[0]))(dataloader_data) 
+                     for dataloader_data in epoch_data]
+                    )
+                guess_max = max(
+                    [(lambda x: self._find_maximum_value(x.get()[1]))(dataloader_data) 
+                     for dataloader_data in epoch_data]
+                    )
+
+                global_min.append(min(truth_min, guess_min))
+                global_max.append(max(truth_max, guess_max))
+
+            global_min = min(global_min)
+            global_max = max(global_max)
+
+            y_min_max = (global_min, global_max)
+
+            for i in range(len(self._truth_guess_per_epoch)):
+                self._plot_truth_vs_guess_init(
                     idx = i,
                     which_to_plot = self.which_to_plot,
                     y_min_max= y_min_max
                 )
         return
         
-    def _plot_forecast_vs_ground_truth(self, 
-                                       idx: int = -1, 
-                                       which_to_plot: Union[None, list] = None,
-                                       y_min_max: Union[None, tuple] = None,
-                                       ) -> None:
+    def _plot_truth_vs_guess_init(self,
+                                  idx: int = -1,
+                                  which_to_plot: Union[None, list] = None,
+                                  y_min_max: Union[None, tuple] = None,
+                                ) -> None:
+        # Create subfolder for each epoch
+        # Working dir is now the subfolder
+        subdir_name = f"epoch_{idx}"
+        working_dir = os.path.join(
+            self.working_dir, 
+            subdir_name
+            )
+        create_folder_if_not_exists(working_dir)
+
+        # Plotting
+        fig_name = f"{self.name}_prediction_trend"
+        for all_dataloaders_truth_and_guess in self._truth_guess_per_epoch[idx]:
+            for truth_and_guess in all_dataloaders_truth_and_guess:
+                # Get figure sequence
+                fig_sequence = self._get_plot_sequence(
+                    working_dir, 
+                    fig_name
+                    )
+                fig_name = f"{fig_name}_{str(fig_sequence).zfill(3)}"
+
+                # Call the plotting function
+                self._plot_truth_vs_guess_new(
+                    fig_name,
+                    working_dir,
+                    truth_and_guess,
+                    which_to_plot=which_to_plot,
+                    y_min_max=y_min_max,
+                )
+        return
+    
+    def _plot_truth_vs_guess_new(self,
+                                 figure_name: str,
+                                 working_dir: str,
+                                 truth_and_guess: TransformerTruthAndGuess,
+                                 which_to_plot: Union[None, list] = None,
+                                 y_min_max: Union[None, tuple] = None,
+                                 ) -> None:
         """
         which_to_plot: accept a list that contains the forecast sequence user would like to plot,
             Default: all
             Usage example: [0, 3, 5] plot forecast sequence 0, 3, 5.
         """
-        fig_name = f"{self.name}_prediction_trend"
-        # Create subfolder
-        working_dir = os.path.join(
-            self.working_dir, 
-            fig_name
-            )
-        create_folder_if_not_exists(working_dir)
-        # Get figure sequence
-        fig_sequence = self._get_plot_sequence(
-            working_dir, 
-            fig_name
-            )
+        # Get data
+        ground_truth, forecast_guess = truth_and_guess.get()
 
         # Create a figure and axis
         fig, ax = plt.subplots()
@@ -353,8 +467,8 @@ class TransformerVisualLogger:
                           '#bcbd22', 
                           '#17becf'
                           ]
-        ground_truth, forecast_guess = self.data_pair[idx]
         ax.plot(ground_truth, linewidth=2)
+        ## Draw the line
         for i, c in zip(which_to_plot, default_colors):
             data = forecast_guess[i]
             label = f"{i}-unit forecast line"
@@ -384,13 +498,13 @@ class TransformerVisualLogger:
         ax.spines['right'].set_visible(False)
 
         # Add title
-        plt.title(" ".join(fig_name.split("_")))
+        plt.title(" ".join(figure_name.split("_")))
 
         # Show the plot
         plt.savefig(
             os.path.join(
                 working_dir, 
-                f"{fig_name}_{fig_sequence}.png"
+                f"{figure_name}.png"
                 ), 
             dpi = 1000,
             format = "png")
@@ -422,6 +536,9 @@ class TransformerVisualLogger:
         return new_sequence_number
     
     def _find_minimum_value(self, matrix) -> float:
+        """
+        Find the minimum value in a 2-D matrix
+        """
         # Initialize the minimum value with the first element in the matrix
         min_value = 0x3f3f3f3f
 
@@ -434,6 +551,9 @@ class TransformerVisualLogger:
         return min_value
     
     def _find_maximum_value(self, matrix) -> float:
+        """
+        Find the maximum value in a 2-D matrix
+        """
         # Initialize the minimum value with the first element in the matrix
         max_value = -0x3f3f3f3f
 
@@ -635,7 +755,6 @@ class TimeSeriesTransformer(nn.Module):
                 prediction = self(src, tgt, src_mask, tgt_mask)
 
                 # Compute and backprop loss
-                # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {prediction.shape}\n")
                 loss = loss_fn(tgt_y, prediction)
                 total_loss += loss.item()
                 loss.backward()

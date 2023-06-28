@@ -279,7 +279,7 @@ def main() -> None:
                     HYPERPARAMETER["knowledge_length"],
                     vis_logger = train_logger,
                 )
-                train_logger.plot()
+                train_logger.signal_new_epoch()
                 bar.refresh()
 
                 val_loss = model.val(
@@ -292,7 +292,7 @@ def main() -> None:
                     WORKING_DIR,
                     vis_logger = val_logger,
                     )
-                val_logger.plot()
+                val_logger.signal_new_epoch()
                 scheduler_0.step()
                 scheduler_1.step()
                 # scheduler_2.step(val_loss)
@@ -326,9 +326,9 @@ def main() -> None:
     visualize_loss(t_loss, WORKING_DIR, f"{MODEL_NAME}_val")
     visualize_loss(t_train_loss, WORKING_DIR, f"{MODEL_NAME}_train")
     train_logger.save_data()
-    train_logger.plot()
+    train_logger.signal_new_epoch()
     val_logger.save_data()
-    val_logger.plot()
+    val_logger.signal_new_epoch()
     return
 
 if __name__ == "__main__":
