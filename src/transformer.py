@@ -534,7 +534,7 @@ class TransformerVisualLogger:
             if sequence_number > max_sequence:
                 max_sequence = sequence_number
 
-        cprint(f"sequence number: {sequence_number} \n", "green")
+        cprint(f"sequence number: {max_sequence} \n", "green")
         new_sequence_number = max_sequence + 1
 
         return new_sequence_number
