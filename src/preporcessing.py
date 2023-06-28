@@ -331,16 +331,37 @@ def create_more_data(data: pd.DataFrame) -> pd.DataFrame:
 
     return data
 
-def normalization_and_scaling(data: pd.DataFrame) -> pd.DataFrame:
+def one_hot_label(data: pd.DataFrame) -> pd.DataFrame:
+    """
+    Create one hot label for the data
+    """
+    target_columns = [
+        "line 1 pump speed",
+        "line 2 pump speed",
+        "PAC pump 1 speed",
+        "PAC pump 2 speed",
+    ]
+    skip_columns = []
+    for i in target_columns:
+        data[i] *= 2
+        data[i] = data[i].round(-1)
+        data[i] /= 10
+        data[i] = data[i].astype(np.int8)
+
+        # Generate one-hot labels for each value in the range
+        for j in range(0, 11): # The pump speed is expected to be in 0-50
+            skip_columns.append(f"{i} {j}")
+            data[f"{i} {j}"] = (data[i] == j).astype(np.uint8)
+    
+    return data, skip_columns
+
+def normalization_and_scaling(data: pd.DataFrame, skip_columns: list=[]) -> pd.DataFrame:
     # Data normalization and scaling
     print(colored("Normalization and scaling data", "green"))
     print()
     target_columns = data.columns.tolist()
-    target_columns.remove("year")
-    target_columns.remove("time_x")
-    target_columns.remove("time_y")
-    target_columns.remove("date_x")
-    target_columns.remove("date_y")
+    for i in skip_columns:
+        target_columns.remove(i)
 
     scaling_factors = []
     for column in target_columns:
@@ -434,7 +455,7 @@ def main() -> None:
     visualize_variance(data, new_remove(data.columns.tolist(), "timestamp"))
     visual_data_distribution("data_distribution_after_dropping", data.drop(columns=["timestamp"]))
     visualize_data_trend("data_trend_after_dropping", data)
-    
+
     """
     Notes on the basic column information
     For most features, the coeff of variance is really big,
@@ -472,9 +493,21 @@ def main() -> None:
     visual_data_distribution("data_distribution_after_creation", data)
     visualize_data_trend("data_trend_after_creation", data)
 
+    # One-hot label
+    cprint("Creating one-hot label", color="black", on_color="on_cyan", attrs=["blink"])
+    data, skip_columns = one_hot_label(data)
+    _additional_skip_columns = [
+        "year",
+        "time_x",
+        "time_y",
+        "date_x",
+        "date_y",
+    ]
+    skip_columns.extend(_additional_skip_columns)
+
     # Normalization and scaling data
     cprint("Normalizing and scaling data.", color="black", on_color="on_cyan", attrs=["blink"])
-    data, scaling_factors = normalization_and_scaling(data)
+    data, scaling_factors = normalization_and_scaling(data, skip_columns=skip_columns)
     console_general_data_info(data)
     console_general_data_info(scaling_factors)
     visualize_variance(data, data.columns.tolist())
