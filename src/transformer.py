@@ -431,7 +431,6 @@ class TransformerVisualLogger:
                 basename
                 )
             fig_name = f"{basename}_{str(fig_sequence).zfill(3)}"
-            cprint(f"Name: {fig_name} \nFig sequence: {fig_sequence}", "green")
             
             # Call the plotting function
             self._plot_truth_vs_guess(
@@ -457,7 +456,6 @@ class TransformerVisualLogger:
         """
         # Get data
         ground_truth, forecast_guess = truth_and_guess.get()
-        cprint(f"Length: {len(ground_truth)} \n{len(forecast_guess)}\n", "green")
 
         # Create a figure and axis
         fig, ax = plt.subplots()
@@ -537,7 +535,6 @@ class TransformerVisualLogger:
             if sequence_number > max_sequence:
                 max_sequence = sequence_number
 
-        cprint(f"sequence number: {max_sequence} \n", "green")
         new_sequence_number = max_sequence + 1
 
         return new_sequence_number
