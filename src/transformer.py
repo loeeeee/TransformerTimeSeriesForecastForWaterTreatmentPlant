@@ -454,6 +454,7 @@ class TransformerVisualLogger:
         """
         # Get data
         ground_truth, forecast_guess = truth_and_guess.get()
+        cprint(f"Length: {len(ground_truth)}} \n{len(forecast_guess)}\n", "green")
 
         # Create a figure and axis
         fig, ax = plt.subplots()
@@ -529,11 +530,11 @@ class TransformerVisualLogger:
             
             # Extract the sequence number from the last part
             sequence_number = int(parts[-1])
-            cprint(f"sequence number: {sequence_number} \npart: {parts}", "green")
             
             if sequence_number > max_sequence:
                 max_sequence = sequence_number
 
+        cprint(f"sequence number: {sequence_number} \n", "green")
         new_sequence_number = max_sequence + 1
 
         return new_sequence_number
