@@ -206,7 +206,6 @@ def main() -> None:
     # Model
     model = TimeSeriesTransformer(
         INPUT_FEATURE_SIZE,
-        FORECAST_FEATURE_SIZE,
         model_name = MODEL_NAME,
         embedding_dimension = 512
     ).to(device)

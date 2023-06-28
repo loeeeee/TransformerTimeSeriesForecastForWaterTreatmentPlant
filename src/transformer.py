@@ -592,15 +592,14 @@ class PositionalEncoding(nn.Module):
         """
         x = x + self.pe[:x.size(0)]
         return self.dropout(x)
-    
 
+        
 class TimeSeriesTransformer(nn.Module):
     """
     Loe learned a lot doing this
     """
     def __init__(self, 
                  input_size: int,
-                 forecast_feature_size: int,
                  *args, 
                  embedding_dimension: int               = 512,
                  multi_head_attention_head_size: int    = 8,
@@ -621,6 +620,9 @@ class TimeSeriesTransformer(nn.Module):
         super().__init__()
         
         self.model_name = model_name
+
+        # Force the model only have one output feature
+        forecast_feature_size = 1
 
         # Input embedding
         self.encoder_input_layer = nn.Linear(
@@ -845,7 +847,54 @@ class TimeSeriesTransformer(nn.Module):
         tqdm.write("\n")
 
         return test_loss
-    
+
+
+class ClassifierTransformer(TimeSeriesTransformer):
+    def __init__(self, 
+                 input_size: int,
+                 forecast_feature_size: int,
+                 *args, 
+                 embedding_dimension: int               = 512,
+                 multi_head_attention_head_size: int    = 8,
+                 num_of_encoder_layers: int             = 4,
+                 num_of_decoder_layers: int             = 4,
+                 model_name: str                        = "time_series_transformer",
+                 **kwargs
+                 ) -> None:
+        """
+        input_size: number of features
+        forecast_feature_size: number of features to forecast
+        embedding_dimension: the internal dimension of the model
+        multi_head_attention_head_size: number of head of the attention layer, 
+            applied to all the attention layers
+        num_of_encoder_layers: literally
+        num_of_decoder_layers: literally
+        """
+        super().__init__(
+            input_size,
+            forecast_feature_size,
+            embedding_dimension = embedding_dimension,
+            multi_head_attention_head_size = multi_head_attention_head_size,
+            num_of_encoder_layers = num_of_encoder_layers,
+            num_of_decoder_layers= num_of_decoder_layers,
+            model_name = model_name,
+            **kwargs
+        )
+        
+        self.model_name = model_name
+
+        # Output embedding
+        self.decoder_input_layer = nn.Linear(
+            in_features     = forecast_feature_size,
+            out_features    = embedding_dimension
+        )
+        
+        # Final forecast output of decoder
+        self.final_output = nn.Linear(
+            in_features     = embedding_dimension,
+            out_features    = forecast_feature_size
+        )
+
 
 class TransformerDataset(torch.utils.data.Dataset):
     """
