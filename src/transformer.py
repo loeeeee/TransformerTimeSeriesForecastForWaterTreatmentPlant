@@ -348,7 +348,10 @@ class TransformerVisualLogger:
         Because signal_new_epoch not only plots, but also reorganize data, and signal a new epoch.
         """
         # Organize data
-        self._truth_guess_per_dataloader.pop(-1) # Remove the last unused TransformerTruthAndGuess
+        self._truth_guess_per_dataloader = [truth_and_guess for truth_and_guess in self._truth_guess_per_dataloader if (len(truth_and_guess.get()[0]) > 0)]
+        # Remove the last unused TransformerTruthAndGuess
+            
+        # self._truth_guess_per_dataloader.pop(-1) 
         self._truth_guess_per_epoch.append(self._truth_guess_per_dataloader)
         self._truth_guess_per_dataloader = [TransformerTruthAndGuess()]
 
