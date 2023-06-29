@@ -1,6 +1,7 @@
 import os
 import math
 import json
+import random
 
 import torch
 from torch import nn
@@ -421,6 +422,13 @@ class TransformerVisualLogger:
             )
         create_folder_if_not_exists(working_dir)
 
+        # Tracking progress
+        bar = tqdm(
+            total       = len(self._truth_guess_per_epoch[idx]), 
+            desc        = colored("Plotting", "green", attrs=["blink"]),
+            unit        = "frame",
+            position    = 1,
+            )
         # Plotting
         basename = f"{self.name}_prediction_trend"
         for dataloader_truth_and_guess in self._truth_guess_per_epoch[idx]:
@@ -438,7 +446,10 @@ class TransformerVisualLogger:
                 dataloader_truth_and_guess,
                 which_to_plot=which_to_plot,
                 y_min_max=y_min_max,
-            )
+            )  
+            bar.update()
+        bar.set_description("Finish plotting")
+        bar.close()
         return
     
     def _plot_truth_vs_guess(self,
@@ -740,7 +751,10 @@ class TimeSeriesTransformer(nn.Module):
 
         # Metadata
         total_length = sum([len(dataloader) for dataloader in dataloaders])
-        bar = tqdm(total=total_length, position=1)
+        bar = tqdm(
+            total       = total_length, 
+            position    = 1,
+            )
         total_loss = 0
 
         # Generate masks
@@ -863,7 +877,6 @@ class TimeSeriesTransformer(nn.Module):
             name = str(type(additional_monitor))[8:-2].split(".")[-1]
             loss = additional_loss[str(type(additional_monitor))] / total_batches
             tqdm.write(f" {name}: {loss:>8f}")
-        tqdm.write("\n")
 
         return test_loss
 

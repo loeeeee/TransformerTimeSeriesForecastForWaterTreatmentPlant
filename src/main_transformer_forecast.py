@@ -62,7 +62,6 @@ def generate_skip_columns():
     for column in Y_COLUMNS:
         for i in range(11):
             skip_columns.append(f"{column} {i}")
-    print(skip_columns)
     return skip_columns
 SKIP_COLUMNS = generate_skip_columns()
 TGT_COLUMNS = "line 1 pump speed"
@@ -187,7 +186,6 @@ def load(path: str, train_val_split: float=0.8) -> list:
         except Exception:
             continue
     
-    print(train, val)
     return train, val
 
 """
