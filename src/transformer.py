@@ -14,6 +14,9 @@ from termcolor import colored, cprint
 import pandas as pd
 import matplotlib.pyplot as plt
 
+GREEN = "#00af34"
+WHITE = "#ffffff"
+
 def run_encoder_decoder_inference(
     model: nn.Module, 
     src: torch.Tensor, 
@@ -428,6 +431,7 @@ class TransformerVisualLogger:
             desc        = colored("Plotting", "green", attrs=["blink"]),
             unit        = "frame",
             position    = 1,
+            colour      = GREEN,
             )
         # Plotting
         basename = f"{self.name}_prediction_trend"
@@ -449,6 +453,7 @@ class TransformerVisualLogger:
             )  
             bar.update()
         bar.set_description("Finish plotting")
+        bar.colour = WHITE
         bar.close()
         return
     
@@ -754,6 +759,7 @@ class TimeSeriesTransformer(nn.Module):
         bar = tqdm(
             total       = total_length, 
             position    = 1,
+            colour      = GREEN,
             )
         total_loss = 0
 
@@ -795,7 +801,7 @@ class TimeSeriesTransformer(nn.Module):
                 bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(i+1)):.3f}", refresh=True)
                 bar.update()
             vis_logger.signal_new_dataloader()
-        
+        bar.colour = WHITE
         bar.close()
 
         return total_loss/total_length
@@ -840,7 +846,11 @@ class TimeSeriesTransformer(nn.Module):
         with torch.no_grad():
             test_loss = 0
             correct = 0
-            bar = tqdm(total=total_batches, position=1)
+            bar = tqdm(
+                total       = total_batches, 
+                position    = 1,
+                colour      = GREEN,
+                )
             for dataloader in dataloaders:
                 for i, (src, tgt, tgt_y) in enumerate(dataloader):
                     src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
@@ -867,6 +877,7 @@ class TimeSeriesTransformer(nn.Module):
                     bar.update()
                     bar.set_description(desc=f"Loss: {(test_loss/(1+i)):.3f}", refresh=True)
                 vis_logger.signal_new_dataloader()
+            bar.colour = WHITE
             bar.close()
         test_loss /= total_batches
         correct /= total_batches
