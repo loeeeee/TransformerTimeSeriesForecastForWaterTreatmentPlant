@@ -895,6 +895,44 @@ class ClassifierTransformer(TimeSeriesTransformer):
             out_features    = forecast_feature_size
         )
 
+        # Classifier layer
+        self.classifier = nn.Softmax(
+            dim             = forecast_feature_size,
+        )
+
+    def forward(self, 
+                src: torch.Tensor, 
+                tgt: torch.Tensor, 
+                src_mask: torch.Tensor, 
+                tgt_mask: torch.Tensor
+                ) -> torch.Tensor:
+        result = super().forward(src, tgt, src_mask, tgt_mask)
+        result = self.classifier(result)
+        return result
+    
+    def learn(self, 
+              dataloaders: list, 
+              loss_fn: any, 
+              optimizer: any, 
+              device: str, 
+              forecast_length: int, 
+              knowledge_length: int, 
+              vis_logger: TransformerVisualLogger | None = None
+              ) -> float:
+        return super().learn(dataloaders, loss_fn, optimizer, device, forecast_length, knowledge_length, vis_logger)
+    
+    def val(self, 
+            dataloaders: list, 
+            loss_fn: any, 
+            device: str, 
+            forecast_length: int, 
+            knowledge_length: int, 
+            metrics: list, 
+            working_dir: str, 
+            vis_logger: TransformerVisualLogger | None = None
+            ) -> float:
+        return super().val(dataloaders, loss_fn, device, forecast_length, knowledge_length, metrics, working_dir, vis_logger)
+
 
 class TransformerDataset(torch.utils.data.Dataset):
     """

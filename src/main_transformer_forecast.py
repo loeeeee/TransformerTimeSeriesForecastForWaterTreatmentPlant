@@ -54,11 +54,23 @@ Y_COLUMNS = [
     "PAC pump 1 speed",
     "PAC pump 2 speed",
 ]
+def generate_skip_columns():
+    """
+    Skip the one-hot label columns
+    """
+    skip_columns = []
+    for column in Y_COLUMNS:
+        for i in range(11):
+            skip_columns.append(f"{column} {i}")
+    print(skip_columns)
+    return skip_columns
+SKIP_COLUMNS = generate_skip_columns()
 TGT_COLUMNS = "line 1 pump speed"
 INPUT_FEATURE_SIZE = 16
 FORECAST_FEATURE_SIZE = 1
 
 # Subprocess
+
 def train_test(dataloader: DataLoader,
                model: TimeSeriesTransformer,
                loss_fn: any,
@@ -92,6 +104,7 @@ def train_test(dataloader: DataLoader,
 
 def csv_to_loader(
         csv_dir: str,
+        skip_columns: list = [],
         ) -> torch.utils.data.DataLoader:
     # Read csv
     data = pd.read_csv(
@@ -107,6 +120,11 @@ def csv_to_loader(
     # Make sure data is in ascending order by timestamp
     data.sort_values(by=["timestamp"], inplace=True)
     
+    # Remove skip columns
+    data = data.drop(
+        columns=skip_columns,
+    )
+
     # Split data
     src = data.drop(
         columns=Y_COLUMNS
@@ -156,7 +174,7 @@ def load(path: str, train_val_split: float=0.8) -> list:
     for csv_file in csv_files[:int(len(csv_files)*train_val_split)]:
         current_csv = os.path.join(path, csv_file)
         try:
-            train.append(csv_to_loader(current_csv))
+            train.append(csv_to_loader(current_csv, skip_columns=SKIP_COLUMNS))
         except Exception:
             continue
 
@@ -165,10 +183,11 @@ def load(path: str, train_val_split: float=0.8) -> list:
     for csv_file in csv_files[int(len(csv_files)*train_val_split):]:
         current_csv = os.path.join(path, csv_file)
         try:
-            val.append(csv_to_loader(current_csv))
+            val.append(csv_to_loader(current_csv, skip_columns=SKIP_COLUMNS))
         except Exception:
             continue
     
+    print(train, val)
     return train, val
 
 """
