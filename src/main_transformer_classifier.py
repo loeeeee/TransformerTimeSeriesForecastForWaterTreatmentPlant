@@ -5,7 +5,7 @@ import settings # Get config
 import utils # TODO: recode this
 
 from helper import *
-from transformer import TimeSeriesTransformer, TransformerDataset, TransformerVisualLogger, transformer_collate_fn
+from transformer import ClassifierTransformer, TransformerDataset, TransformerVisualLogger, transformer_collate_fn
 
 import torch
 from torch import nn
@@ -70,12 +70,12 @@ def generate_y_columns() -> list:
     return y_columns
 SKIP_COLUMNS.extend(generate_y_columns())
 INPUT_FEATURE_SIZE = 16
-FORECAST_FEATURE_SIZE = 1
+FORECAST_FEATURE_SIZE = 11
 
 # Subprocess
 
 def train_test(dataloader: DataLoader,
-               model: TimeSeriesTransformer,
+               model: ClassifierTransformer,
                loss_fn: any,
                optimizer: torch.optim,
                device: str,
@@ -118,7 +118,7 @@ def csv_to_loader(
     
     # Downcast data
     data = to_numeric_and_downcast_data(data)
-    
+
     # Make sure data is in ascending order by timestamp
     data.sort_values(by=["timestamp"], inplace=True)
     
@@ -139,7 +139,7 @@ def csv_to_loader(
         raise Exception
     
     src = torch.tensor(src.values)
-    tgt = torch.tensor(tgt.values).unsqueeze(1)
+    tgt = torch.tensor(tgt.values, dtype=torch.float32)
     
     dataset = TransformerDataset(
         src,
@@ -220,8 +220,9 @@ def main() -> None:
     train_loaders, val_loaders = load(INPUT_DATA)
 
     # Model
-    model = TimeSeriesTransformer(
+    model = ClassifierTransformer(
         INPUT_FEATURE_SIZE,
+        FORECAST_FEATURE_SIZE,
         model_name = MODEL_NAME,
         embedding_dimension = 512
     ).to(device)
@@ -237,7 +238,7 @@ def main() -> None:
     metrics.append(mae)
     metrics.append(mse)
     ## Optimizer
-    lr = 0.0001  # learning rate
+    lr = 0.1  # learning rate
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
     scheduler_1 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(

@@ -351,7 +351,6 @@ class TransformerVisualLogger:
         self._truth_guess_per_dataloader = [truth_and_guess for truth_and_guess in self._truth_guess_per_dataloader if (len(truth_and_guess.get()[0]) > 0)]
         # Remove the last unused TransformerTruthAndGuess
             
-        # self._truth_guess_per_dataloader.pop(-1) 
         self._truth_guess_per_epoch.append(self._truth_guess_per_dataloader)
         self._truth_guess_per_dataloader = [TransformerTruthAndGuess()]
 
@@ -568,7 +567,13 @@ class TransformerVisualLogger:
                 max_value = local_maximum
 
         return max_value
-        
+
+
+class ClassifierTransformerVisualLogger(TransformerVisualLogger):
+    def __init__(self, name: str, working_dir: str, meta_data: dict = {}, runtime_plotting: bool = True, which_to_plot: list | None = None) -> None:
+        super().__init__(name, working_dir, meta_data, runtime_plotting, which_to_plot)
+
+    
 
 class PositionalEncoding(nn.Module):
     """
@@ -622,7 +627,7 @@ class TimeSeriesTransformer(nn.Module):
         self.model_name = model_name
 
         # Force the model only have one output feature
-        forecast_feature_size = 1
+        _forecast_feature_size = 1
 
         # Input embedding
         self.encoder_input_layer = nn.Linear(
@@ -632,14 +637,14 @@ class TimeSeriesTransformer(nn.Module):
         
         # Output embedding
         self.decoder_input_layer = nn.Linear(
-            in_features     = forecast_feature_size,
+            in_features     = _forecast_feature_size,
             out_features    = embedding_dimension
         )
         
         # Final forecast output of decoder
         self.final_output = nn.Linear(
             in_features     = embedding_dimension,
-            out_features    = forecast_feature_size
+            out_features    = _forecast_feature_size
         )
 
         # Positional encoding layer after the encoder input
@@ -761,7 +766,7 @@ class TimeSeriesTransformer(nn.Module):
                 prediction = self(src, tgt, src_mask, tgt_mask)
 
                 # Compute and backprop loss
-                loss = loss_fn(tgt_y, prediction)
+                loss = loss_fn(prediction, tgt_y)
                 total_loss += loss.item()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
@@ -806,6 +811,17 @@ class TimeSeriesTransformer(nn.Module):
         for additional_monitor in metrics:
             additional_loss[str(type(additional_monitor))] = 0
 
+        # Generate masks
+        src_mask = generate_square_subsequent_mask(
+            dim1=forecast_length,
+            dim2=knowledge_length
+            ).to(device)
+        
+        tgt_mask = generate_square_subsequent_mask(
+            dim1=forecast_length,
+            dim2=forecast_length
+            ).to(device)
+        
         # Validation
         with torch.no_grad():
             test_loss = 0
@@ -815,6 +831,7 @@ class TimeSeriesTransformer(nn.Module):
                 for i, (src, tgt, tgt_y) in enumerate(dataloader):
                     src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
                     # tqdm.write(f"{src.shape}, {tgt.shape}, {tgt_y.shape}")
+                    """
                     pred = run_encoder_decoder_inference(
                        self, 
                        src, 
@@ -822,6 +839,8 @@ class TimeSeriesTransformer(nn.Module):
                        src.shape[1],
                        device
                        )
+                    """
+                    pred = self(src, tgt, src_mask, tgt_mask)
 
                     if vis_logger != None:
                         vis_logger.append(tgt_y, pred)
@@ -873,6 +892,7 @@ class ClassifierTransformer(TimeSeriesTransformer):
         super().__init__(
             input_size,
             forecast_feature_size,
+            *args, 
             embedding_dimension = embedding_dimension,
             multi_head_attention_head_size = multi_head_attention_head_size,
             num_of_encoder_layers = num_of_encoder_layers,
@@ -886,7 +906,7 @@ class ClassifierTransformer(TimeSeriesTransformer):
         # Output embedding
         self.decoder_input_layer = nn.Linear(
             in_features     = forecast_feature_size,
-            out_features    = embedding_dimension
+            out_features    = embedding_dimension,
         )
         
         # Final forecast output of decoder
@@ -896,9 +916,11 @@ class ClassifierTransformer(TimeSeriesTransformer):
         )
 
         # Classifier layer
+        """
         self.classifier = nn.Softmax(
             dim             = forecast_feature_size,
         )
+        """
 
     def forward(self, 
                 src: torch.Tensor, 
@@ -907,7 +929,8 @@ class ClassifierTransformer(TimeSeriesTransformer):
                 tgt_mask: torch.Tensor
                 ) -> torch.Tensor:
         result = super().forward(src, tgt, src_mask, tgt_mask)
-        result = self.classifier(result)
+        # print(result.size())
+        # result = self.classifier(result)
         return result
     
     def learn(self, 
@@ -984,6 +1007,30 @@ class TransformerDataset(torch.utils.data.Dataset):
 def transformer_collate_fn(data):
     """
     src, tgt, tgt_y
+    structure of data:
+        [
+            [
+                [src
+                
+                ],
+                [tgt
+                
+                ],
+                [tgt_y
+                
+                ]
+            ],
+            [
+                [src
+                
+                ],
+                [...
+                
+                ],
+                ...
+            ],
+            ...
+        ]
     """
     result = [[], [], []]
     for i in range(3):
