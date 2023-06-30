@@ -361,7 +361,7 @@ class TransformerLossConsolePlotter:
         self._temp_loss = []
         self._x_axis.append(self._x_axis_cnt)
         self._x_axis_cnt += 1
-        
+
         # Plot
         to_plot = plot(
             self._loss,
@@ -1062,7 +1062,6 @@ class TimeSeriesTransformer(nn.Module):
 
                 # Compute and backprop loss
                 loss = loss_fn(prediction, tgt_y)
-                # tqdm.write(f"Loss: {loss.item()}")
                 total_loss += loss.item()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
@@ -1133,18 +1132,8 @@ class TimeSeriesTransformer(nn.Module):
             for dataloader in dataloaders:
                 for (src, tgt, tgt_y) in dataloader:
                     src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
-                    # tqdm.write(f"{src.shape}, {tgt.shape}, {tgt_y.shape}")
-                    """
-                    pred = run_encoder_decoder_inference(
-                       self, 
-                       src, 
-                       forecast_length,
-                       src.shape[1],
-                       device
-                       )
-                    """
+
                     pred = self(src, tgt, src_mask, tgt_mask)
-                    # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {pred.shape}\n")
                     loss = loss_fn(pred, tgt_y).item()
                     test_loss += loss
                     correct += (pred == tgt_y).type(torch.float).sum().item()
@@ -1235,33 +1224,164 @@ class ClassifierTransformer(TimeSeriesTransformer):
                 tgt_mask: torch.Tensor
                 ) -> torch.Tensor:
         result = super().forward(src, tgt, src_mask, tgt_mask)
-        # print(result.size())
-        # result = self.classifier(result)
         return result
     
-    def learn(self, 
-              dataloaders: list, 
-              loss_fn: any, 
-              optimizer: any, 
-              device: str, 
-              forecast_length: int, 
-              knowledge_length: int, 
-              vis_logger: TransformerForecastPlotter | None = None
+    def learn(self,
+              dataloaders: list[torch.utils.data.DataLoader],
+              loss_fn: any,
+              optimizer: torch.optim,
+              device: str,
+              forecast_length: int,
+              knowledge_length: int,
+              vis_logger: Union[None, TransformerVisualLogger] = None,
               ) -> float:
-        return super().learn(dataloaders, loss_fn, optimizer, device, forecast_length, knowledge_length, vis_logger)
-    
-    def val(self, 
-            dataloaders: list, 
-            loss_fn: any, 
-            device: str, 
-            forecast_length: int, 
-            knowledge_length: int, 
-            metrics: list, 
-            working_dir: str, 
-            vis_logger: TransformerForecastPlotter | None = None
-            ) -> float:
-        return super().val(dataloaders, loss_fn, device, forecast_length, knowledge_length, metrics, working_dir, vis_logger)
+        """
+        Return the loss of the training
+        """
+        # Start training
+        self.train()
 
+        # Metadata
+        total_length = sum([len(dataloader) for dataloader in dataloaders])
+        bar = tqdm(
+            total       = total_length, 
+            position    = 1,
+            colour      = GREEN,
+            )
+        total_loss = 0
+
+        # Generate masks
+        src_mask = generate_square_subsequent_mask(
+            dim1=forecast_length,
+            dim2=knowledge_length
+            ).to(device)
+        
+        tgt_mask = generate_square_subsequent_mask(
+            dim1=forecast_length,
+            dim2=forecast_length
+            ).to(device)
+        
+        # Iterate through dataloaders
+        batch_cnt = 0
+        for dataloader in dataloaders:
+            for (src, tgt, tgt_y) in dataloader:
+                src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
+
+                # zero the parameter gradients
+                optimizer.zero_grad()
+
+                # Make forecasts
+                prediction = self(src, tgt, src_mask, tgt_mask)
+
+                # Compute and backprop loss
+                transformed_prediction = torch.permute(prediction, (1, 2, 0))
+                transformed_tgt_y = torch.permute(tgt_y, (1, 2, 0))
+
+                loss = loss_fn(transformed_prediction, transformed_tgt_y)
+                total_loss += loss.item()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+
+                # Take optimizer step
+                optimizer.step()
+
+                # Add data to val_logger
+                if vis_logger != None:
+                    vis_logger.append_to_forecast_plotter(tgt_y, prediction)
+                    vis_logger.append_to_loss_console_plotter(loss.item())
+
+                bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(batch_cnt+1)):.3f}", refresh=True)
+                batch_cnt += 1
+                bar.update()
+            vis_logger.signal_new_dataloader()
+        bar.colour = BLACK
+        bar.close()
+
+        return total_loss/total_length
+    
+    def val(self,
+            dataloaders: list[torch.utils.data.DataLoader],
+            loss_fn: any,
+            device: str,
+            forecast_length: int,
+            knowledge_length: int,
+            metrics: list,
+            working_dir: str,
+            vis_logger: Union[None, TransformerVisualLogger] = None,
+            ) -> float:
+        """
+        Which to plot: receive a list that contains the forecast sequence needed to be plotted
+        scaler: receive a tuple, (average, stddev). The scaler is used to reproduce original values, instead of the normalized ones.
+        Return the loss of validation
+        """
+        # Metadata
+        total_batches = sum([len(dataloader) for dataloader in dataloaders])
+
+        # Start evaluation
+        self.eval()
+
+        additional_loss = {}
+        for additional_monitor in metrics:
+            additional_loss[str(type(additional_monitor))] = 0
+
+        # Generate masks
+        src_mask = generate_square_subsequent_mask(
+            dim1=forecast_length,
+            dim2=knowledge_length
+            ).to(device)
+        
+        tgt_mask = generate_square_subsequent_mask(
+            dim1=forecast_length,
+            dim2=forecast_length
+            ).to(device)
+        
+        # Validation
+        with torch.no_grad():
+            test_loss = 0
+            correct = 0
+            bar = tqdm(
+                total       = total_batches, 
+                position    = 1,
+                colour      = GREEN,
+                )
+            batch_cnt = 0
+            for dataloader in dataloaders:
+                for (src, tgt, tgt_y) in dataloader:
+                    src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
+
+                    pred = self(src, tgt, src_mask, tgt_mask)
+
+                    # The transformation is for the input format requirement of the CrossEntropy
+                    transformed_prediction = torch.permute(pred, (1, 2, 0))
+                    transformed_tgt_y = torch.permute(tgt_y, (1, 2, 0))
+
+                    loss = loss_fn(transformed_prediction, transformed_tgt_y).item()
+                    test_loss += loss
+                    correct += (pred == tgt_y).type(torch.float).sum().item()
+
+                    if vis_logger != None:
+                        vis_logger.append_to_forecast_plotter(tgt_y, pred)
+                        vis_logger.append_to_loss_console_plotter(loss)
+
+                    for additional_monitor in metrics:
+                        additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
+                    bar.update()
+                    bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)
+                    batch_cnt += 1
+                vis_logger.signal_new_dataloader()
+            bar.colour = BLACK
+            bar.close()
+        test_loss /= total_batches
+        correct /= total_batches
+        
+        # Report
+        tqdm.write(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} ")
+        for additional_monitor in metrics:
+            name = str(type(additional_monitor))[8:-2].split(".")[-1]
+            loss = additional_loss[str(type(additional_monitor))] / total_batches
+            tqdm.write(f" {name}: {loss:>8f}")
+
+        return test_loss
 
 class TransformerDataset(torch.utils.data.Dataset):
     """
