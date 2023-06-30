@@ -14,8 +14,6 @@ from typing import Tuple, Union, Optional, Any, List
 from helper import create_folder_if_not_exists
 
 import pandas as pd
-import plotext as plterm
-import uniplot as pltuni
 import matplotlib.pyplot as plt
 
 GREEN = "#00af34"
@@ -176,6 +174,10 @@ def generate_square_subsequent_mask(dim1: int, dim2: int) -> torch.Tensor:
     """
     return torch.triu(torch.ones(dim1, dim2) * float('-inf'), diagonal=1)
 
+"""
+The following part is modified from uniplot. Thanks a lot! Uniplot
+"""
+
 from uniplot.multi_series import MultiSeries
 from uniplot.options import Options
 import uniplot.layer_assembly as layer_assembly
@@ -319,6 +321,10 @@ def _generate_body_raw_elements(
 
     return (x_axis_labels, y_axis_labels, pixel_character_matrix)
 
+"""
+End of uniplot part
+"""
+
 class TransformerLossConsolePlotter:
     def __init__(self, name: str) -> None:
         """
@@ -348,12 +354,14 @@ class TransformerLossConsolePlotter:
         # Spacing
         if self._dataloader_cnt == 0:
             tqdm.write("\n"*20)
+
         # Organize data
         total_loss = sum(self._temp_loss) / len(self._temp_loss)
         self._loss.append(total_loss)
         self._temp_loss = []
         self._x_axis.append(self._x_axis_cnt)
         self._x_axis_cnt += 1
+        
         # Plot
         to_plot = plot(
             self._loss,

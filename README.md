@@ -1,13 +1,17 @@
 # Transformer for time series data forecasting
 
 No data included in the repo
+Should work fine with most csv data input.
 
 ## Usage
 
-Two main things:
+Three main things:
 
 - preprocessing.py
-- main_transformer.py
+- main_transformer_forecast.py
+- main_transformer_classifier.py
+
+The fnn is mainly for fun.
 
 The rest of the code are mainly helper
 
