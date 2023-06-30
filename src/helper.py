@@ -221,6 +221,7 @@ def visualize_loss(t_loss: TrackerLoss, root_saving_dir: str, model_name: str) -
     plt.ylabel("Loss (MSE)")
     plt.figtext(0, 0, f"Minimum loss: {t_loss.lowest_loss}", color="#a41095")
     plt.savefig(os.path.join(root_saving_dir, f"{fig_name}.png"), dpi=300)
+    plt.clf()
     return
 
 def split_data(data: pd.DataFrame):
