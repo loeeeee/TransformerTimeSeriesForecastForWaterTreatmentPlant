@@ -15,7 +15,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 GREEN = "#00af34"
-WHITE = "#ffffff"
+BLACK = "#ffffff"
 
 def run_encoder_decoder_inference(
     model: nn.Module, 
@@ -453,7 +453,7 @@ class TransformerVisualLogger:
             )  
             bar.update()
         bar.set_description("Finish plotting")
-        bar.colour = WHITE
+        bar.colour = BLACK
         bar.close()
         return
     
@@ -526,7 +526,7 @@ class TransformerVisualLogger:
                 working_dir, 
                 f"{figure_name}.png"
                 ), 
-            dpi = 1000,
+            dpi = 400,
             format = "png")
         plt.clf()
         plt.close()
@@ -784,6 +784,7 @@ class TimeSeriesTransformer(nn.Module):
 
                 # Make forecasts
                 prediction = self(src, tgt, src_mask, tgt_mask)
+                print(f"Prediction: {prediction.size()}")
 
                 # Compute and backprop loss
                 loss = loss_fn(prediction, tgt_y)
@@ -801,7 +802,7 @@ class TimeSeriesTransformer(nn.Module):
                 bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(i+1)):.3f}", refresh=True)
                 bar.update()
             vis_logger.signal_new_dataloader()
-        bar.colour = WHITE
+        bar.colour = BLACK
         bar.close()
 
         return total_loss/total_length
@@ -877,7 +878,7 @@ class TimeSeriesTransformer(nn.Module):
                     bar.update()
                     bar.set_description(desc=f"Loss: {(test_loss/(1+i)):.3f}", refresh=True)
                 vis_logger.signal_new_dataloader()
-            bar.colour = WHITE
+            bar.colour = BLACK
             bar.close()
         test_loss /= total_batches
         correct /= total_batches
