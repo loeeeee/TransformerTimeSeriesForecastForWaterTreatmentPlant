@@ -7,11 +7,15 @@ import torch
 from torch import nn
 
 from tqdm import tqdm
-from typing import Tuple, Union
-from helper import create_folder_if_not_exists
+from numpy.typing import NDArray
 from termcolor import colored, cprint
+from tqdm.utils import _term_move_up
+from typing import Tuple, Union, Optional, Any, List
+from helper import create_folder_if_not_exists
 
 import pandas as pd
+import plotext as plterm
+import uniplot as pltuni
 import matplotlib.pyplot as plt
 
 GREEN = "#00af34"
@@ -172,6 +176,222 @@ def generate_square_subsequent_mask(dim1: int, dim2: int) -> torch.Tensor:
     """
     return torch.triu(torch.ones(dim1, dim2) * float('-inf'), diagonal=1)
 
+from uniplot.multi_series import MultiSeries
+from uniplot.options import Options
+import uniplot.layer_assembly as layer_assembly
+import uniplot.plot_elements as elements
+from uniplot.getch import getch
+from uniplot.param_initializer import validate_and_transform_options
+from uniplot.axis_labels.extended_talbot_labels import extended_talbot_labels
+
+def plot(ys: Any, xs: Optional[Any] = None, **kwargs) -> list:
+    """
+    2D scatter dot plot on the terminal.
+
+    Parameters:
+
+    - `ys` are the y coordinates of the points to plot. This parameter is mandatory and
+      can either be a list or a list of lists, or the equivalent NumPy array.
+    - `xs` are the x coordinates of the points to plot. This parameter is optional and
+      can either be a `None` or of the same shape as `ys`.
+    - Any additional keyword arguments are passed to the `uniplot.options.Options` class.
+    """
+    series: MultiSeries = MultiSeries(xs=xs, ys=ys)
+    options: Options = validate_and_transform_options(series=series, kwargs=kwargs)
+    # Things to plot
+    things_to_plot = []
+
+    # Print header
+    for line in _generate_header(options):
+        things_to_plot.append(line)
+
+    # Main loop for interactive mode. Will only be executed once when not in interactive # mode.
+    continue_looping: bool = True
+    loop_iteration: int = 0
+    while continue_looping:
+        # Make sure we stop after first iteration when not in interactive mode
+        if not options.interactive:
+            continue_looping = False
+
+        (
+            x_axis_labels,
+            y_axis_labels,
+            pixel_character_matrix,
+        ) = _generate_body_raw_elements(series, options)
+
+        # Delete plot before we re-draw
+        if loop_iteration > 0:
+            nr_lines_to_erase = options.height + 4
+            if options.legend_labels is not None:
+                nr_lines_to_erase += len(options.legend_labels)
+            elements.erase_previous_lines(nr_lines_to_erase)
+
+        for line in _generate_body(
+            x_axis_labels, y_axis_labels, pixel_character_matrix, options
+        ):
+            things_to_plot.append(line)
+    return things_to_plot
+
+def _generate_header(options: Options) -> List[str]:
+    """
+    Generates the header of the plot, so everything above the first line of plottable area.
+    """
+    if options.title is None:
+        return []
+
+    return [elements.plot_title(options.title, width=options.width)]
+
+
+def _generate_body(
+    x_axis_labels: str,
+    y_axis_labels: List[str],
+    pixel_character_matrix: NDArray,
+    options: Options,
+) -> List[str]:
+    """
+    Generates the body of the plot.
+    """
+    lines: List[str] = []
+
+    # Print plot (double resolution)
+    lines.append(f"┌{'─'*options.width}┐")
+    for i in range(options.height):
+        row = pixel_character_matrix[i]
+        lines.append(f"│{''.join(row)}│ {y_axis_labels[i]}")
+    lines.append(f"└{'─'*options.width}┘")
+    lines.append(x_axis_labels)
+
+    # Print legend if labels were specified
+    if options.legend_labels is not None:
+        lines.append(elements.legend(options.legend_labels, width=options.width))
+
+    return lines
+
+
+def _generate_body_raw_elements(
+    series: MultiSeries, options: Options
+) -> Tuple[str, List[str], NDArray]:
+    """
+    Generates the x-axis labels, y-axis labels, and the pixel character matrix.
+    """
+    # Prepare y axis labels
+    y_axis_label_set = extended_talbot_labels(
+        x_min=options.y_min,
+        x_max=options.y_max,
+        available_space=options.height,
+        unit=options.y_unit,
+        log=options.y_as_log,
+        vertical_direction=True,
+    )
+    y_axis_labels = [""] * options.height
+    if y_axis_label_set is not None:
+        y_axis_labels = y_axis_label_set.render()
+
+    # Observe line_length_hard_cap
+    if options.line_length_hard_cap is not None:
+        options.reset_width()
+        # Determine maximum length of y axis label
+        max_y_label_length = max([len(l) for l in y_axis_labels])
+        # Make sure the total plot does not exceed `line_length_hard_cap`
+        if 2 + options.width + 1 + max_y_label_length > options.line_length_hard_cap:
+            # Overflow, so we need to reduce width of plot area
+            options.width = options.line_length_hard_cap - (2 + 1 + max_y_label_length)
+            if options.width < 1:
+                raise
+
+    # Prepare x axis labels
+    x_axis_label_set = extended_talbot_labels(
+        x_min=options.x_min,
+        x_max=options.x_max,
+        available_space=options.width,
+        unit=options.x_unit,
+        log=options.x_as_log,
+        vertical_direction=False,
+    )
+    x_axis_labels = ""
+    if x_axis_label_set is not None:
+        x_axis_labels = x_axis_label_set.render()[0]
+
+    # Prepare graph surface
+    pixel_character_matrix = layer_assembly.assemble_scatter_plot(
+        xs=series.xs, ys=series.ys, options=options
+    )
+
+    return (x_axis_labels, y_axis_labels, pixel_character_matrix)
+
+class TransformerLossConsolePlotter:
+    def __init__(self, name: str) -> None:
+        """
+        This class plots the loss trend in console
+        This class plots training loss and validation loss at the same time.
+        """
+        self.name = name
+        self._loss = []
+        self._dataloader_cnt = 0
+        self._x_axis = []
+        self._epoch_cnt = 0
+        self._x_axis_cnt = 0
+
+        self._temp_loss = []
+
+    def append(self, loss) -> None:
+        """
+        Append data to be plot in the training loss trend
+        """
+        self._temp_loss.append(loss)
+        return
+    
+    def signal_new_dataloader(self) -> None:
+        """
+        Move the plot left a bit.
+        """
+        # Spacing
+        if self._dataloader_cnt == 0:
+            tqdm.write("\n"*20)
+        # Organize data
+        total_loss = sum(self._temp_loss) / len(self._temp_loss)
+        self._loss.append(total_loss)
+        self._temp_loss = []
+        self._x_axis.append(self._x_axis_cnt)
+        self._x_axis_cnt += 1
+        # Plot
+        to_plot = plot(
+            self._loss,
+            xs = self._x_axis,
+            title = (f"{self.name} trend"),
+            lines = True
+            )
+
+        # Remove previous plot
+        for i in range(21):
+            tqdm.write(_term_move_up() + "\r" + " "*70 + "\r", end="")
+        for i in to_plot:
+            tqdm.write(i)
+
+        # Count
+        self._dataloader_cnt += 1
+        return
+    
+    def signal_new_epoch(self) -> None:
+        """
+        Modify the x-axis, adding 1
+        """
+        self._epoch_cnt += 1
+        self._dataloader_cnt = 0
+        return
+    
+    def save_data(self, dir_overwrite: str="") -> None:
+        """
+        Save the loss data
+        """
+        return
+    
+    def load_data(self) -> None:
+        """
+        Load the loss data
+        """
+        return
+    
 
 class TransformerTruthAndGuess:
     def __init__(self) -> None:
@@ -219,7 +439,7 @@ class TransformerTruthAndGuess:
         return self._ground_truth, self._forecast_guess
 
 
-class TransformerVisualLogger:
+class TransformerForecastPlotter:
     """
     Logging evaluation process for visualization
     If runtime_plotting is set to false, save_data must be called before calling plot.
@@ -583,9 +803,55 @@ class TransformerVisualLogger:
                 max_value = local_maximum
 
         return max_value
+    
+class TransformerVisualLogger:
+    def __init__(self, 
+                name: str,
+                working_dir: str, 
+                meta_data: dict = {},
+                runtime_plotting: bool = True,
+                which_to_plot: Union[None, list] = None,
+                ) -> None:
+        
+        self.tfp = TransformerForecastPlotter(
+            name,
+            working_dir,
+            meta_data=meta_data,
+            runtime_plotting=runtime_plotting,
+            which_to_plot=which_to_plot,
+        )
+        self.tlcp = TransformerLossConsolePlotter(
+            name,
+        )
+
+    def signal_new_epoch(self) -> None:
+        self.tfp.signal_new_epoch()
+        self.tlcp.signal_new_epoch()
+        return
+
+    def signal_new_dataloader(self) -> None:
+        self.tfp.signal_new_dataloader()
+        self.tlcp.signal_new_dataloader()
+        return
+
+    def save_data(self, dir_overwrite: str="") -> None:
+        self.tfp.save_data(dir_overwrite=dir_overwrite)
+        return
+    
+    def load_data(self) -> None:
+        self.tfp.load_data()
+        return
+    
+    def append_to_forecast_plotter(self, ground_truth, forecast_guess) -> None:
+        self.tfp.append(ground_truth, forecast_guess)
+        return
+    
+    def append_to_loss_console_plotter(self, loss) -> None:
+        self.tlcp.append(loss)
+        return
 
 
-class ClassifierTransformerVisualLogger(TransformerVisualLogger):
+class ClassifierTransformerVisualLogger(TransformerForecastPlotter):
     def __init__(self, name: str, working_dir: str, meta_data: dict = {}, runtime_plotting: bool = True, which_to_plot: list | None = None) -> None:
         super().__init__(name, working_dir, meta_data, runtime_plotting, which_to_plot)
 
@@ -775,8 +1041,9 @@ class TimeSeriesTransformer(nn.Module):
             ).to(device)
         
         # Iterate through dataloaders
+        batch_cnt = 0
         for dataloader in dataloaders:
-            for i, (src, tgt, tgt_y) in enumerate(dataloader):
+            for (src, tgt, tgt_y) in dataloader:
                 src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
 
                 # zero the parameter gradients
@@ -784,10 +1051,10 @@ class TimeSeriesTransformer(nn.Module):
 
                 # Make forecasts
                 prediction = self(src, tgt, src_mask, tgt_mask)
-                print(f"Prediction: {prediction.size()}")
 
                 # Compute and backprop loss
                 loss = loss_fn(prediction, tgt_y)
+                # tqdm.write(f"Loss: {loss.item()}")
                 total_loss += loss.item()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
@@ -797,9 +1064,11 @@ class TimeSeriesTransformer(nn.Module):
 
                 # Add data to val_logger
                 if vis_logger != None:
-                    vis_logger.append(tgt_y, prediction)
+                    vis_logger.append_to_forecast_plotter(tgt_y, prediction)
+                    vis_logger.append_to_loss_console_plotter(loss.item())
 
-                bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(i+1)):.3f}", refresh=True)
+                bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(batch_cnt+1)):.3f}", refresh=True)
+                batch_cnt += 1
                 bar.update()
             vis_logger.signal_new_dataloader()
         bar.colour = BLACK
@@ -852,8 +1121,9 @@ class TimeSeriesTransformer(nn.Module):
                 position    = 1,
                 colour      = GREEN,
                 )
+            batch_cnt = 0
             for dataloader in dataloaders:
-                for i, (src, tgt, tgt_y) in enumerate(dataloader):
+                for (src, tgt, tgt_y) in dataloader:
                     src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
                     # tqdm.write(f"{src.shape}, {tgt.shape}, {tgt_y.shape}")
                     """
@@ -866,17 +1136,20 @@ class TimeSeriesTransformer(nn.Module):
                        )
                     """
                     pred = self(src, tgt, src_mask, tgt_mask)
+                    # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {pred.shape}\n")
+                    loss = loss_fn(pred, tgt_y).item()
+                    test_loss += loss
+                    correct += (pred == tgt_y).type(torch.float).sum().item()
 
                     if vis_logger != None:
-                        vis_logger.append(tgt_y, pred)
+                        vis_logger.append_to_forecast_plotter(tgt_y, pred)
+                        vis_logger.append_to_loss_console_plotter(loss)
 
-                    # tqdm.write(f"tgt_y shape: {tgt_y.shape}\nprediction shape: {pred.shape}\n")
-                    test_loss += loss_fn(pred, tgt_y).item()
-                    correct += (pred == tgt_y).type(torch.float).sum().item()
                     for additional_monitor in metrics:
                         additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
                     bar.update()
-                    bar.set_description(desc=f"Loss: {(test_loss/(1+i)):.3f}", refresh=True)
+                    bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)
+                    batch_cnt += 1
                 vis_logger.signal_new_dataloader()
             bar.colour = BLACK
             bar.close()
@@ -965,7 +1238,7 @@ class ClassifierTransformer(TimeSeriesTransformer):
               device: str, 
               forecast_length: int, 
               knowledge_length: int, 
-              vis_logger: TransformerVisualLogger | None = None
+              vis_logger: TransformerForecastPlotter | None = None
               ) -> float:
         return super().learn(dataloaders, loss_fn, optimizer, device, forecast_length, knowledge_length, vis_logger)
     
@@ -977,7 +1250,7 @@ class ClassifierTransformer(TimeSeriesTransformer):
             knowledge_length: int, 
             metrics: list, 
             working_dir: str, 
-            vis_logger: TransformerVisualLogger | None = None
+            vis_logger: TransformerForecastPlotter | None = None
             ) -> float:
         return super().val(dataloaders, loss_fn, device, forecast_length, knowledge_length, metrics, working_dir, vis_logger)
 

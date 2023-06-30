@@ -14,6 +14,8 @@ transformer_experiment*
 da_rnn_experiment*
 flow_forecast
 experiment
+rotating_donut.c
+rotating_donut
 
 # Environment
 .env
