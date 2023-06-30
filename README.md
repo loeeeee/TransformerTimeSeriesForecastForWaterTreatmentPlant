@@ -12,3 +12,17 @@ Two main things:
 The rest of the code are mainly helper
 
 ## This code should work, I guess
+
+## Training image
+
+Dynamically shows the training process during the training
+
+![Training process](.img/Training.png)
+
+## Kernel PCA
+
+![Kernel PCA](.img/kernel_PCA.png)
+
+## Forecast result
+
+![Forecast result](.img/train_prediction_trend_100.png)
