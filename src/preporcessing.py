@@ -526,7 +526,7 @@ def main() -> None:
     skip_columns.extend(_additional_skip_columns)
     
     # Split data
-    split_and_save_data(data)
+    split_and_save_data(data, "segmented_data")
 
     # Normalization and scaling data
     cprint("Normalizing and scaling data.", color="black", on_color="on_cyan", attrs=["blink"])
@@ -548,7 +548,7 @@ def main() -> None:
     )
 
     # Split data
-    split_and_save_data(data)
+    split_and_save_data(data, "segmented_data_normed")
     return
 
 if __name__ == "__main__":
