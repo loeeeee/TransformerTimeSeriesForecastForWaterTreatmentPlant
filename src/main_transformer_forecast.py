@@ -65,7 +65,7 @@ def generate_skip_columns():
     return skip_columns
 SKIP_COLUMNS = generate_skip_columns()
 TGT_COLUMNS = "line 1 pump speed"
-INPUT_FEATURE_SIZE = 16
+INPUT_FEATURE_SIZE = 16 + 1
 FORECAST_FEATURE_SIZE = 1
 
 # Subprocess
@@ -119,7 +119,7 @@ def csv_to_loader(
     # Make sure data is in ascending order by timestamp
     data.sort_values(by=["timestamp"], inplace=True)
     
-    # Remove skip columns
+    # Remove skip columns, skipping those information for the classifier
     data = data.drop(
         columns=skip_columns,
     )
@@ -128,6 +128,7 @@ def csv_to_loader(
     src = data.drop(
         columns=Y_COLUMNS
     )
+    src[TGT_COLUMNS] = data[TGT_COLUMNS]
     tgt = data[TGT_COLUMNS]
 
     # Drop data that is too short for the prediction

@@ -14,16 +14,33 @@ from helper import console_general_data_info
 
 INPUT_DATA = sys.argv[1]
 VISUAL_DIR = settings.VISUAL_DIR
+Y_COLUMNS = [
+    "line 1 pump speed",
+    "line 2 pump speed",
+    "PAC pump 1 speed",
+    "PAC pump 2 speed",
+]
+def generate_skip_columns():
+    """
+    Skip the one-hot label columns
+    """
+    skip_columns = []
+    for column in Y_COLUMNS:
+        for i in range(11):
+            skip_columns.append(f"{column} {i}")
+    return skip_columns
+SKIP_COLUMNS = generate_skip_columns()
 
 def kernel_pca_gif() -> None:
     # Load csv
     data = pd.read_csv(INPUT_DATA,
                        index_col=0)
-
     console_general_data_info(data)
-    # Visualize the clustering with PCA
-    pca = KernelPCA(n_components=3, kernel='rbf')
+
+    # Only using the first 20000 because of memory limitation
     data = data.head(20000)
+
+    # Remove unnecessary columns
     target_columns = data.columns.tolist()
     target_columns.remove("line 1 pump speed")
     target_columns.remove("line 2 pump speed")
@@ -34,19 +51,26 @@ def kernel_pca_gif() -> None:
     target_columns.remove("time_y")
     target_columns.remove("date_x")
     target_columns.remove("date_y")
+    for i in SKIP_COLUMNS:
+        target_columns.remove(i)
 
+    # Actual PCA
+    pca = KernelPCA(n_components=3, kernel='rbf')
     principal_components = pca.fit_transform(data[target_columns])
-
     principal_df = pd.DataFrame(data=principal_components, columns=['PC1', 'PC2', 'PC3'])
 
+    # Plotting the result
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
     principal_df['label'] = -1
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-    for i in range(5):
-        category_start = i * 10
-        category_end = (i + 1) * 10
-        category_label = i
+    y_min = min(data["line 1 pump speed"].values)
+    y_max = max(data["line 1 pump speed"].values)
+    seg_cnt = 5
+    for i in range(seg_cnt):
+        category_start = y_min + (y_max - y_min) / seg_cnt * i
+        category_end = y_min + (y_max - y_min) / seg_cnt * (i + 1)
+        category_label = f"{i}"
 
         # Categorize the data
         for index, value in enumerate(data["line 1 pump speed"].values):
