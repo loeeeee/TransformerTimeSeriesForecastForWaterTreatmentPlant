@@ -435,6 +435,26 @@ def split_data(data: pd.DataFrame) -> list[pd.DataFrame]:
     # Remove excessive information
     return dfs
 
+def split_and_save_data(data, name: str) -> None:
+    # Split data
+    cprint("Splitting data.", color="black", on_color="on_cyan", attrs=["blink"])
+    data_segments = split_data(data)
+    
+    # Save split data
+    working_dir = os.path.join(DATA_DIR, name)
+    create_folder_if_not_exists(working_dir)
+    bar = tqdm(total=len(data_segments), desc=colored("Saving data", color="green", attrs=["blink"]))
+    for index, data in enumerate(data_segments):
+        data = data.reset_index(drop=True)
+        data = data.set_index("timestamp")
+        data.to_csv(
+            os.path.join(
+                working_dir, f"seg_{index}.csv"
+            )
+        )
+        bar.update()
+    bar.close()
+
 def main() -> None:
     # Load csv
     cprint("Loading csv.", color="black", on_color="on_cyan", attrs=["blink"])
@@ -504,6 +524,9 @@ def main() -> None:
         "date_y",
     ]
     skip_columns.extend(_additional_skip_columns)
+    
+    # Split data
+    split_and_save_data(data)
 
     # Normalization and scaling data
     cprint("Normalizing and scaling data.", color="black", on_color="on_cyan", attrs=["blink"])
@@ -525,23 +548,7 @@ def main() -> None:
     )
 
     # Split data
-    cprint("Splitting data.", color="black", on_color="on_cyan", attrs=["blink"])
-    data_segments = split_data(data)
-    
-    # Save split data
-    working_dir = os.path.join(DATA_DIR, "segmented_data")
-    create_folder_if_not_exists(working_dir)
-    bar = tqdm(total=len(data_segments), desc=colored("Saving data", color="green", attrs=["blink"]))
-    for index, data in enumerate(data_segments):
-        data = data.reset_index(drop=True)
-        data = data.set_index("timestamp")
-        data.to_csv(
-            os.path.join(
-                working_dir, f"seg_{index}.csv"
-            )
-        )
-        bar.update()
-    bar.close()
+    split_and_save_data(data)
     return
 
 if __name__ == "__main__":
