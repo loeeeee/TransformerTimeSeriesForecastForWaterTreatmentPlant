@@ -264,7 +264,8 @@ def main() -> None:
         WORKING_DIR,
         meta_data = HYPERPARAMETER,
         runtime_plotting = True,
-        which_to_plot = [0,int(HYPERPARAMETER["forecast_length"]/2), HYPERPARAMETER["forecast_length"]-1]
+        which_to_plot = [0,int(HYPERPARAMETER["forecast_length"]/2), HYPERPARAMETER["forecast_length"]-1],
+        in_one_figure=True,
     )
     print(colored("Training:", "black", "on_green"), "\n")
     with tqdm(total=t_epoch.max_epoch, unit="epoch", position=0) as bar:

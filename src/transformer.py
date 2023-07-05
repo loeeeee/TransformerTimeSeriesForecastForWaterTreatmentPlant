@@ -473,10 +473,12 @@ class TransformerForecastPlotter:
                  meta_data: dict = {},
                  runtime_plotting: bool = True,
                  which_to_plot: Union[None, list] = None,
+                 in_one_figure: bool = False,
                  ) -> None:
         """
         name: Name of the logger, will be used for names for the folder, do not duplicate the name with other loggers
         runtime_plotting: True means plot when a new data is added
+        in_one_figure: Plot all the data point in one figure regardless of the dataloader signal.
         """
         self.name = name
         self.working_dir = working_dir
@@ -485,6 +487,7 @@ class TransformerForecastPlotter:
         self.which_to_plot = which_to_plot
         self.isFinished = False
         self.epoch_cnt = 0 # Epoch counter is only used when the runtime plotting is set to True
+        self.in_one_figure = in_one_figure
 
         # Truth Guess is stored in the transformer prediction and truth object
         self._truth_guess_per_dataloader = [TransformerTruthAndGuess()]
@@ -588,7 +591,8 @@ class TransformerForecastPlotter:
         Signal a segment for the later plotting,
         It creates a new Transformer Prediction and Truth object
         """
-        self._truth_guess_per_dataloader.append(TransformerTruthAndGuess())
+        if self.in_one_figure:
+            self._truth_guess_per_dataloader.append(TransformerTruthAndGuess())
         return
     
     def signal_new_epoch(self) -> None:
@@ -608,6 +612,7 @@ class TransformerForecastPlotter:
             self._plot_truth_vs_guess_init(
                 idx = self.epoch_cnt,
                 which_to_plot = self.which_to_plot,
+                in_one_figure = self.in_one_figure,
             )
             self.epoch_cnt += 1
         elif self.isFinished and not self.runtime_plotting:
@@ -652,7 +657,8 @@ class TransformerForecastPlotter:
                 self._plot_truth_vs_guess_init(
                     idx = i,
                     which_to_plot = self.which_to_plot,
-                    y_min_max= y_min_max
+                    y_min_max= y_min_max,
+                    in_one_figure = self.in_one_figure,
                 )
         return
         
@@ -660,46 +666,67 @@ class TransformerForecastPlotter:
                                   idx: int = -1,
                                   which_to_plot: Union[None, list] = None,
                                   y_min_max: Union[None, tuple] = None,
+                                  in_one_figure: bool = False,
                                 ) -> None:
-        # Create subfolder for each epoch
-        # Working dir is now the subfolder
-        subdir_name = f"epoch_{idx}"
-        working_dir = os.path.join(
-            self.working_dir, 
-            subdir_name
-            )
-        create_folder_if_not_exists(working_dir)
-
-        # Tracking progress
-        bar = tqdm(
-            total       = len(self._truth_guess_per_epoch[idx]), 
-            desc        = colored("Plotting", "green", attrs=["blink"]),
-            unit        = "frame",
-            position    = 1,
-            colour      = GREEN,
-            )
-        # Plotting
-        basename = f"{self.name}_prediction_trend"
-        for dataloader_truth_and_guess in self._truth_guess_per_epoch[idx]:
-            # Get figure sequence
-            fig_sequence = self._get_plot_sequence(
-                working_dir, 
-                basename
+        if not in_one_figure:
+            # Create subfolder for each epoch
+            # Working dir is now the subfolder
+            subdir_name = f"epoch_{idx}"
+            working_dir = os.path.join(
+                self.working_dir, 
+                subdir_name
                 )
-            fig_name = f"{basename}_{str(fig_sequence).zfill(3)}"
+            create_folder_if_not_exists(working_dir)
+
+            # Tracking progress
+            bar = tqdm(
+                total       = len(self._truth_guess_per_epoch[idx]), 
+                desc        = colored("Plotting", "green", attrs=["blink"]),
+                unit        = "frame",
+                position    = 1,
+                colour      = GREEN,
+                )
+            # Plotting
+            basename = f"{self.name}_prediction_trend"
+            for dataloader_truth_and_guess in self._truth_guess_per_epoch[idx]:
+                # Get figure sequence
+                fig_sequence = self._get_plot_sequence(
+                    working_dir, 
+                    basename
+                    )
+                fig_name = f"{basename}_{str(fig_sequence).zfill(3)}"
+
+                # Call the plotting function
+                self._plot_truth_vs_guess(
+                    fig_name,
+                    working_dir,
+                    dataloader_truth_and_guess,
+                    which_to_plot=which_to_plot,
+                    y_min_max=y_min_max,
+                )  
+                bar.update()
+            bar.set_description("Finish plotting")
+            bar.colour = BLACK
+            bar.close()
+        else:
+            basename = f"epoch_{idx}_{self.name}_prediction_trend"
+            for dataloader_truth_and_guess in self._truth_guess_per_epoch[idx]:
+                # Get figure sequence
+                fig_sequence = self._get_plot_sequence(
+                    working_dir, 
+                    basename
+                    )
+                fig_name = f"{basename}_{str(fig_sequence).zfill(3)}"
+
+                # Call the plotting function
+                self._plot_truth_vs_guess(
+                    fig_name,
+                    working_dir,
+                    dataloader_truth_and_guess,
+                    which_to_plot=which_to_plot,
+                    y_min_max=y_min_max,
+                )  
             
-            # Call the plotting function
-            self._plot_truth_vs_guess(
-                fig_name,
-                working_dir,
-                dataloader_truth_and_guess,
-                which_to_plot=which_to_plot,
-                y_min_max=y_min_max,
-            )  
-            bar.update()
-        bar.set_description("Finish plotting")
-        bar.colour = BLACK
-        bar.close()
         return
     
     def _plot_truth_vs_guess(self,
@@ -840,7 +867,8 @@ class TransformerClassifierPlotter(TransformerForecastPlotter):
                  working_dir: str, 
                  meta_data: dict = {}, 
                  runtime_plotting: bool = True, 
-                 which_to_plot: list | None = None
+                 which_to_plot: list | None = None,
+                 in_one_figure: bool = False,
                  ) -> None:
         """
         Because the data structure is different, a new class is needed.
@@ -849,7 +877,8 @@ class TransformerClassifierPlotter(TransformerForecastPlotter):
                          working_dir, 
                          meta_data, 
                          runtime_plotting, 
-                         which_to_plot
+                         which_to_plot,
+                         in_one_figure,
                          )
     
     def append(self, ground_truth, forecast_guess) -> None:
@@ -877,6 +906,7 @@ class TransformerForecasterVisualLogger:
                 meta_data: dict = {},
                 runtime_plotting: bool = True,
                 which_to_plot: Union[None, list] = None,
+                in_one_figure: bool = False,
                 ) -> None:
         
         self.tfp = TransformerForecastPlotter(
@@ -885,6 +915,7 @@ class TransformerForecasterVisualLogger:
             meta_data=meta_data,
             runtime_plotting=runtime_plotting,
             which_to_plot=which_to_plot,
+            in_one_figure=in_one_figure,
         )
         self.tlcp = TransformerLossConsolePlotter(
             name,
@@ -923,13 +954,15 @@ class TransformerClassifierVisualLogger(TransformerForecasterVisualLogger):
                  working_dir: str, 
                  meta_data: dict = {}, 
                  runtime_plotting: bool = True, 
-                 which_to_plot: list | None = None
+                 which_to_plot: list | None = None,
+                 in_one_figure: bool = False,
                  ) -> None:
         super().__init__(name, 
                          working_dir, 
                          meta_data, 
                          runtime_plotting, 
-                         which_to_plot
+                         which_to_plot,
+                         in_one_figure,
                          )
         self.tfp = TransformerClassifierPlotter(
             name,
@@ -937,6 +970,7 @@ class TransformerClassifierVisualLogger(TransformerForecasterVisualLogger):
             meta_data=meta_data,
             runtime_plotting=runtime_plotting,
             which_to_plot=which_to_plot,
+            in_one_figure=in_one_figure,
         )
 
 
