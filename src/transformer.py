@@ -357,28 +357,32 @@ class TransformerLossConsolePlotter:
             tqdm.write("\n"*20)
 
         # Organize data
-        total_loss = sum(self._temp_loss) / len(self._temp_loss)
-        self._loss.append(total_loss)
-        self._temp_loss = []
-        self._x_axis.append(self._x_axis_cnt)
-        self._x_axis_cnt += 1
+        try:
+            total_loss = sum(self._temp_loss) / len(self._temp_loss)
+        except ZeroDivisionError:
+            pass # For whatever the reason, certain dataloader does not produce loss
+        else:
+            self._loss.append(total_loss)
+            self._temp_loss = []
+            self._x_axis.append(self._x_axis_cnt)
+            self._x_axis_cnt += 1
 
-        # Plot
-        to_plot = plot(
-            self._loss,
-            xs = self._x_axis,
-            title = (f"{self.name} trend"),
-            lines = True
-            )
-
-        # Remove previous plot
-        for i in range(21):
-            tqdm.write(_term_move_up() + "\r" + " "*70 + "\r", end="")
-        for i in to_plot:
-            tqdm.write(i)
-
-        # Count
-        self._dataloader_cnt += 1
+            # Plot
+            to_plot = plot(
+                self._loss,
+                xs = self._x_axis,
+                title = (f"{self.name} trend"),
+                lines = True
+                )
+        finally:
+            # Remove previous plot
+            for i in range(21):
+                tqdm.write(_term_move_up() + "\r" + " "*70 + "\r", end="")
+            for i in to_plot:
+                tqdm.write(i)
+    
+            # Count
+            self._dataloader_cnt += 1
         return
     
     def signal_new_epoch(self) -> None:
