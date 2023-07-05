@@ -34,6 +34,25 @@ VISUAL_DIR = settings.VISUAL_DIR
 DATA_DIR = settings.DATA_DIR
 MODEL_DIR = settings.MODEL_DIR
 
+Y_COLUMNS = [
+    "line 1 pump speed",
+    "line 2 pump speed",
+    "PAC pump 1 speed",
+    "PAC pump 2 speed",
+]
+def generate_skip_columns() -> list:
+    """
+    Skip the one-hot label columns
+    """
+    skip_columns = []
+    for column in Y_COLUMNS:
+        for i in range(11):
+            skip_columns.append(f"{column} {i}")
+    return skip_columns
+SKIP_COLUMNS = generate_skip_columns()
+SKIP_COLUMNS.extend(Y_COLUMNS)
+TGT_COLUMNS = "line 1 pump speed"
+
 # Create working dir
 WORKING_DIR = os.path.join(MODEL_DIR, MODEL_NAME)
 create_folder_if_not_exists(WORKING_DIR)
@@ -51,21 +70,11 @@ def main() -> None:
     val = load_data(INPUT_DATA, "val")
     console_general_data_info(train)
     # Split data
-    tgt_column = "line 1 pump speed"
-    train_src = train.drop(columns=[
-        "line 1 pump speed",
-        "line 2 pump speed",
-        "PAC pump 1 speed",
-        "PAC pump 2 speed",
-    ])
-    train_tgt = train[tgt_column]
-    val_src = val.drop(columns=[
-        "line 1 pump speed",
-        "line 2 pump speed",
-        "PAC pump 1 speed",
-        "PAC pump 2 speed",
-    ])
-    val_tgt = val[tgt_column]
+    print(SKIP_COLUMNS)
+    train_src = train.drop(columns=SKIP_COLUMNS)
+    train_tgt = train[TGT_COLUMNS]
+    val_src = val.drop(columns=SKIP_COLUMNS)
+    val_tgt = val[TGT_COLUMNS]
     
     # Convert data to Tensor object
     train_src = torch.tensor(train_src.values)
@@ -100,7 +109,7 @@ def main() -> None:
     mae = nn.L1Loss()
     metrics.append(mae)
     ## Optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-5)
     scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
     scheduler_1 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer = optimizer,
@@ -155,7 +164,7 @@ def main() -> None:
                 tqdm.write(colored("Loss no longer decrease, finish training", "green", "on_red"))
                 break
             if not t_epoch.check():
-                tqdm.write(colored("Maximam epoch reached. Finish training", "green", "on_red"))
+                tqdm.write(colored("Maximum epoch reached. Finish training", "green", "on_red"))
                 break
             bar.update()
         bar.close()
@@ -170,7 +179,7 @@ def main() -> None:
     save_model(model, WORKING_DIR)
 
     # Visualize training process
-    visualize_val_loss(t_loss, WORKING_DIR, MODEL_NAME)
+    visualize_loss(t_loss, WORKING_DIR, MODEL_NAME)
     return
 
 if __name__ == "__main__":
