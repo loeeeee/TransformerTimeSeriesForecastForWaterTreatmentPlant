@@ -721,7 +721,7 @@ class TransformerForecastPlotter:
                 # Call the plotting function
                 self._plot_truth_vs_guess(
                     fig_name,
-                    working_dir,
+                    self.working_dir,
                     dataloader_truth_and_guess,
                     which_to_plot=which_to_plot,
                     y_min_max=y_min_max,
