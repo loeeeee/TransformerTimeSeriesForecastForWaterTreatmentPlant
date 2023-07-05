@@ -360,7 +360,10 @@ class TransformerLossConsolePlotter:
         try:
             total_loss = sum(self._temp_loss) / len(self._temp_loss)
         except ZeroDivisionError:
-            # Plot something to for the format purpose
+            # Remove previous plot
+            for i in range(21):
+                tqdm.write(_term_move_up() + "\r" + " "*70 + "\r", end="")
+            # Plot something to for the debug purpose
             tqdm.write(colored("ERROR! Divided by zero!", "red", attrs=["blink"]))
             for i in range(20):
                 tqdm.write("")
@@ -378,12 +381,12 @@ class TransformerLossConsolePlotter:
                 title = (f"{self.name} trend"),
                 lines = True
                 )
-            for i in to_plot:
-                tqdm.write(i)
-        finally:
             # Remove previous plot
             for i in range(21):
                 tqdm.write(_term_move_up() + "\r" + " "*70 + "\r", end="")
+            for i in to_plot:
+                tqdm.write(i)
+        finally:
             # Count
             self._dataloader_cnt += 1
         return
