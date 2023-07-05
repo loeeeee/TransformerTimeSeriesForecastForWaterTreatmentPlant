@@ -132,7 +132,7 @@ def csv_to_loader(
     src = data.copy()
 
     # Drop data that is too short for the prediction
-    if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"] + 1:
+    if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"]:
         print(f"Drop {colored(csv_dir, 'red' )}")
         raise Exception
     

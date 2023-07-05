@@ -1140,7 +1140,8 @@ class TimeSeriesTransformer(nn.Module):
                 bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(batch_cnt+1)):.3f}", refresh=True)
                 batch_cnt += 1
                 bar.update()
-            vis_logger.signal_new_dataloader()
+            if vis_logger != None:
+                vis_logger.signal_new_dataloader()
         bar.colour = BLACK
         bar.close()
 
@@ -1210,7 +1211,8 @@ class TimeSeriesTransformer(nn.Module):
                     bar.update()
                     bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)
                     batch_cnt += 1
-                vis_logger.signal_new_dataloader()
+                if vis_logger != None:
+                    vis_logger.signal_new_dataloader()
             bar.colour = BLACK
             bar.close()
         test_loss /= total_batches
@@ -1356,7 +1358,8 @@ class ClassifierTransformer(TimeSeriesTransformer):
                 bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(batch_cnt+1)):.3f}", refresh=True)
                 batch_cnt += 1
                 bar.update()
-            vis_logger.signal_new_dataloader()
+            if vis_logger != None:
+                vis_logger.signal_new_dataloader()
         bar.colour = BLACK
         bar.close()
 
@@ -1431,7 +1434,8 @@ class ClassifierTransformer(TimeSeriesTransformer):
                     bar.update()
                     bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)
                     batch_cnt += 1
-                vis_logger.signal_new_dataloader()
+                if vis_logger != None:
+                    vis_logger.signal_new_dataloader()
             bar.colour = BLACK
             bar.close()
         test_loss /= total_batches
