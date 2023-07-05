@@ -392,12 +392,14 @@ class TransformerLossConsolePlotter:
         """
         Save the loss data
         """
+        # TODO
         return
     
     def load_data(self) -> None:
         """
         Load the loss data
         """
+        # TODO
         return
     
 
@@ -561,6 +563,8 @@ class TransformerForecastPlotter:
                ) -> None:
         """
         Add data pair to the runtime storage
+        When running forecast model, the size of ground truth is [forecast length, batch size, 1];
+        the size of forecast guess is [forecast length, batch size, 1]
         """
         # This append is a custom append of TransformerTruthAndGuess
         self._truth_guess_per_dataloader[-1].append(ground_truth, forecast_guess)
@@ -812,7 +816,43 @@ class TransformerForecastPlotter:
 
         return max_value
     
-class TransformerVisualLogger:
+class TransformerClassifierPlotter(TransformerForecastPlotter):
+    def __init__(self, 
+                 name: str, 
+                 working_dir: str, 
+                 meta_data: dict = {}, 
+                 runtime_plotting: bool = True, 
+                 which_to_plot: list | None = None
+                 ) -> None:
+        """
+        Because the data structure is different, a new class is needed.
+        """
+        super().__init__(name, 
+                         working_dir, 
+                         meta_data, 
+                         runtime_plotting, 
+                         which_to_plot
+                         )
+    
+    def append(self, ground_truth, forecast_guess) -> None:
+        """
+        When running classification model, the size of ground truth is [forecast length, batch size, one-hot label count];
+        the size of forecast guess is [forecast length, batch size, one-hot label count]
+        ground truth: [
+            [
+                [0, 0, 0, 0, 1, 0, 0, 0, 0...],
+                [0, 0, 0, 1, 0, 0, 0, 0, 0...],
+                ...
+            ],
+            ...
+        ]
+        """
+        ground_truth = torch.argmax(ground_truth, dim=2).unsqueeze(2)
+        forecast_guess = torch.argmax(forecast_guess, dim=2).unsqueeze(2)
+        return super().append(ground_truth, forecast_guess)
+        
+    
+class TransformerForecasterVisualLogger:
     def __init__(self, 
                 name: str,
                 working_dir: str, 
@@ -859,11 +899,28 @@ class TransformerVisualLogger:
         return
 
 
-class ClassifierTransformerVisualLogger(TransformerForecastPlotter):
-    def __init__(self, name: str, working_dir: str, meta_data: dict = {}, runtime_plotting: bool = True, which_to_plot: list | None = None) -> None:
-        super().__init__(name, working_dir, meta_data, runtime_plotting, which_to_plot)
+class TransformerClassifierVisualLogger(TransformerForecasterVisualLogger):
+    def __init__(self, 
+                 name: str, 
+                 working_dir: str, 
+                 meta_data: dict = {}, 
+                 runtime_plotting: bool = True, 
+                 which_to_plot: list | None = None
+                 ) -> None:
+        super().__init__(name, 
+                         working_dir, 
+                         meta_data, 
+                         runtime_plotting, 
+                         which_to_plot
+                         )
+        self.tfp = TransformerClassifierPlotter(
+            name,
+            working_dir,
+            meta_data=meta_data,
+            runtime_plotting=runtime_plotting,
+            which_to_plot=which_to_plot,
+        )
 
-    
 
 class PositionalEncoding(nn.Module):
     """
@@ -1020,7 +1077,7 @@ class TimeSeriesTransformer(nn.Module):
               device: str,
               forecast_length: int,
               knowledge_length: int,
-              vis_logger: Union[None, TransformerVisualLogger] = None,
+              vis_logger: Union[None, TransformerForecasterVisualLogger] = None,
               ) -> float:
         """
         Return the loss of the training
@@ -1091,7 +1148,7 @@ class TimeSeriesTransformer(nn.Module):
             knowledge_length: int,
             metrics: list,
             working_dir: str,
-            vis_logger: Union[None, TransformerVisualLogger] = None,
+            vis_logger: Union[None, TransformerForecasterVisualLogger] = None,
             ) -> float:
         """
         Which to plot: receive a list that contains the forecast sequence needed to be plotted
@@ -1233,7 +1290,7 @@ class ClassifierTransformer(TimeSeriesTransformer):
               device: str,
               forecast_length: int,
               knowledge_length: int,
-              vis_logger: Union[None, TransformerVisualLogger] = None,
+              vis_logger: Union[None, TransformerForecasterVisualLogger] = None,
               ) -> float:
         """
         Return the loss of the training
@@ -1307,7 +1364,7 @@ class ClassifierTransformer(TimeSeriesTransformer):
             knowledge_length: int,
             metrics: list,
             working_dir: str,
-            vis_logger: Union[None, TransformerVisualLogger] = None,
+            vis_logger: Union[None, TransformerForecasterVisualLogger] = None,
             ) -> float:
         """
         Which to plot: receive a list that contains the forecast sequence needed to be plotted

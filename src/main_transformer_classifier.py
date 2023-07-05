@@ -5,7 +5,7 @@ import settings # Get config
 import utils # TODO: recode this
 
 from helper import *
-from transformer import ClassifierTransformer, TransformerDataset, TransformerVisualLogger, transformer_collate_fn
+from transformer import ClassifierTransformer, TransformerDataset, TransformerClassifierVisualLogger, transformer_collate_fn
 
 import torch
 from torch import nn
@@ -253,14 +253,14 @@ def main() -> None:
     t_loss = TrackerLoss(-1, model)
     t_train_loss = TrackerLoss(-1, model)
     # Validation logger
-    train_logger = TransformerVisualLogger(
+    train_logger = TransformerClassifierVisualLogger(
         "train",
         WORKING_DIR,
         meta_data = HYPERPARAMETER,
         runtime_plotting = True,
         which_to_plot = [0,int(HYPERPARAMETER["forecast_length"]/2), HYPERPARAMETER["forecast_length"]-1]
     )
-    val_logger = TransformerVisualLogger(
+    val_logger = TransformerClassifierVisualLogger(
         "val",
         WORKING_DIR,
         meta_data = HYPERPARAMETER,
