@@ -29,7 +29,7 @@ except IndexError:
     current_time = datetime.now()
     # Format the timestamp as YY-MM-DD-HH-MM
     formatted_time = current_time.strftime("%y-%m-%d-%H-%M")
-    MODEL_NAME = f"trans_{formatted_time}"
+    MODEL_NAME = f"trans_for_{formatted_time}"
 VISUAL_DIR = settings.VISUAL_DIR
 DATA_DIR = settings.DATA_DIR
 MODEL_DIR = settings.MODEL_DIR
@@ -219,7 +219,7 @@ def main() -> None:
     # path = "/".join(INPUT_DATA.split('/')[:-1])
     # name = INPUT_DATA.split('/')[-1].split(".")[0]
 
-    train_loaders, val_loaders = load(INPUT_DATA)
+    train_loaders, val_loaders = load(INPUT_DATA, train_val_split=0.667)
 
     # Model
     model = TimeSeriesTransformer(
@@ -249,7 +249,7 @@ def main() -> None:
         patience = 2,
     )
     t_epoch = TrackerEpoch(100)
-    t_loss = TrackerLoss(-1, model)
+    t_loss = TrackerLoss(10, model)
     t_train_loss = TrackerLoss(-1, model)
     # Validation logger
     train_logger = TransformerForecasterVisualLogger(
