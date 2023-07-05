@@ -713,7 +713,7 @@ class TransformerForecastPlotter:
             for dataloader_truth_and_guess in self._truth_guess_per_epoch[idx]:
                 # Get figure sequence
                 fig_sequence = self._get_plot_sequence(
-                    working_dir, 
+                    self.working_dir, 
                     basename
                     )
                 fig_name = f"{basename}_{str(fig_sequence).zfill(3)}"
