@@ -386,9 +386,11 @@ class TransformerLossConsolePlotter:
                 tqdm.write(_term_move_up() + "\r" + " "*70 + "\r", end="")
             for i in to_plot:
                 tqdm.write(i)
-        finally:
             # Count
             self._dataloader_cnt += 1
+        if self._epoch_cnt >= 1:
+            self._loss.pop(0)
+            self._x_axis.pop(0)
         return
     
     def signal_new_epoch(self) -> None:
