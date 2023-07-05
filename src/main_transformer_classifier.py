@@ -69,7 +69,7 @@ def generate_y_columns() -> list:
         y_columns.remove(column)
     return y_columns
 SKIP_COLUMNS.extend(generate_y_columns())
-INPUT_FEATURE_SIZE = 16
+INPUT_FEATURE_SIZE = 16 + 11 # Features and historical results
 FORECAST_FEATURE_SIZE = 11
 
 # Subprocess
@@ -129,9 +129,7 @@ def csv_to_loader(
 
     # Split data
     tgt = data[TGT_COLUMNS]
-    src = data.drop(
-        columns=TGT_COLUMNS
-    )
+    src = data.copy()
 
     # Drop data that is too short for the prediction
     if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"]:
