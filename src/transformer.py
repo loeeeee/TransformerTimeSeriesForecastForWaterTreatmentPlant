@@ -374,13 +374,12 @@ class TransformerLossConsolePlotter:
                 title = (f"{self.name} trend"),
                 lines = True
                 )
+            for i in to_plot:
+                tqdm.write(i)
         finally:
             # Remove previous plot
             for i in range(21):
                 tqdm.write(_term_move_up() + "\r" + " "*70 + "\r", end="")
-            for i in to_plot:
-                tqdm.write(i)
-    
             # Count
             self._dataloader_cnt += 1
         return
