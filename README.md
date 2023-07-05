@@ -1,7 +1,8 @@
 # Transformer for time series data forecasting
 
-No data included in the repo
-Should work fine with most csv data input.
+**No data included in the repo**. However, it should work fine with most csv data input.
+
+I am considering the data later when the repo is ready
 
 ## Usage
 
