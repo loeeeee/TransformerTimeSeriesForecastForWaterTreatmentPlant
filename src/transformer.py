@@ -360,7 +360,11 @@ class TransformerLossConsolePlotter:
         try:
             total_loss = sum(self._temp_loss) / len(self._temp_loss)
         except ZeroDivisionError:
-            pass # For whatever the reason, certain dataloader does not produce loss
+            # Plot something to for the format purpose
+            tqdm.write(colored("ERROR! Divided by zero!", "red", attrs=["blink"]))
+            for i in range(20):
+                tqdm.write("")
+            # For whatever the reason, certain dataloader does not produce loss
         else:
             self._loss.append(total_loss)
             self._temp_loss = []
