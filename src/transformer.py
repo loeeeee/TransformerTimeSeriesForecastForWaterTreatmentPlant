@@ -14,6 +14,7 @@ from typing import Tuple, Union, Optional, Any, List
 from helper import create_folder_if_not_exists
 
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 
 GREEN = "#00af34"
@@ -703,6 +704,10 @@ class TransformerForecastPlotter:
         """
         # Get data
         ground_truth, forecast_guess = truth_and_guess.get()
+        # Calculate MSE for 1-unit forecast
+        ground_truth = np.asarray(ground_truth)
+        forecast_guess = np.asarray(forecast_guess)
+        mse = (np.square(ground_truth - forecast_guess[0])).mean(axis=1)
 
         # Create a figure and axis
         fig, ax = plt.subplots()
@@ -731,6 +736,7 @@ class TransformerForecastPlotter:
         ax.set_ylabel('Data')
         ax.set_title('Prediction Trend Plot')
         plt.legend(loc="upper left")
+        plt.figtext(0, 0, f"MSE for 1 unit forecast: {mse}", color="#a41095")
 
         # Add grid lines
         ax.grid(True, linestyle='--', alpha=0.7)
