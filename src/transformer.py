@@ -707,7 +707,7 @@ class TransformerForecastPlotter:
         # Calculate MSE for 1-unit forecast
         ground_truth = np.asarray(ground_truth)
         forecast_guess = np.asarray(forecast_guess)
-        mse = (np.square(ground_truth - forecast_guess[0])).mean(axis=1)
+        mse = (np.square(ground_truth - forecast_guess[0])).mean(axis=0)
 
         # Create a figure and axis
         fig, ax = plt.subplots()
