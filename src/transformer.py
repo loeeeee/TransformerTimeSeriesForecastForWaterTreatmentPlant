@@ -709,24 +709,16 @@ class TransformerForecastPlotter:
             bar.colour = BLACK
             bar.close()
         else:
-            basename = f"epoch_{idx}_{self.name}_prediction_trend"
-            for dataloader_truth_and_guess in self._truth_guess_per_epoch[idx]:
-                # Get figure sequence
-                fig_sequence = self._get_plot_sequence(
-                    self.working_dir, 
-                    basename
-                    )
-                fig_name = f"{basename}_{str(fig_sequence).zfill(3)}"
-
-                # Call the plotting function
-                self._plot_truth_vs_guess(
-                    fig_name,
-                    self.working_dir,
-                    dataloader_truth_and_guess,
-                    which_to_plot=which_to_plot,
-                    y_min_max=y_min_max,
-                )  
-            
+            fig_name = f"epoch_{idx}_{self.name}_prediction_trend"
+            dataloader_truth_and_guess = self._truth_guess_per_epoch[idx][0]
+            # Call the plotting function
+            self._plot_truth_vs_guess(
+                fig_name,
+                self.working_dir,
+                dataloader_truth_and_guess,
+                which_to_plot=which_to_plot,
+                y_min_max=y_min_max,
+            )
         return
     
     def _plot_truth_vs_guess(self,
@@ -766,9 +758,10 @@ class TransformerForecastPlotter:
         ax.plot(ground_truth, linewidth=2)
         ## Draw the line
         for i, c in zip(which_to_plot, default_colors):
+            x_axis = [j+i+1 for j in range(len(forecast_guess[i]))]
             data = forecast_guess[i]
             label = f"{i}-unit forecast line"
-            ax.plot(data, linewidth=1, label=label, color=c, alpha=0.5)
+            ax.plot(x_axis, data, linewidth=1, label=label, color=c, alpha=0.5)
             
         # Add labels and title
         ax.set_xlabel('Time')
@@ -1246,6 +1239,7 @@ class TimeSeriesTransformer(nn.Module):
                     pred = self(src, tgt, src_mask, tgt_mask)
                     loss = loss_fn(pred, tgt_y).item()
                     test_loss += loss
+                    # TODO: Check accuracy calculation
                     correct += (pred == tgt_y).type(torch.float).sum().item()
 
                     if vis_logger != None:
