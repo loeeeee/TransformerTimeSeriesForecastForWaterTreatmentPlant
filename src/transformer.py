@@ -481,6 +481,7 @@ class TransformerForecastPlotter:
         runtime_plotting: True means plot when a new data is added
         in_one_figure: Plot all the data point in one figure regardless of the dataloader signal.
         plot_interval: define how often the plotting is called.
+        TODO: Async plotting
         """
         self.name = name
         self.working_dir = working_dir

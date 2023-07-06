@@ -34,6 +34,22 @@ Dynamically shows the training process during the training
 
 ![Correlation](.img/correlation.png)
 
-## Forecast result
+## Training
 
-![Forecast result](.img/train_prediction_trend_009.png)
+### Training start
+
+![Training result](.img/train_prediction_trend_epoch_0_009.png)
+
+### Training end
+
+![Training result](.img/train_prediction_trend_epoch_77_009.png)
+
+## Validation
+
+### Validation start
+
+![Validation result](.img/epoch_0_val_prediction_trend.png)
+
+### Validation end
+
+![Validation result](.img/epoch_77_val_prediction_trend.png)
