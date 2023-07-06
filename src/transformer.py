@@ -474,11 +474,13 @@ class TransformerForecastPlotter:
                  runtime_plotting: bool = True,
                  which_to_plot: Union[None, list] = None,
                  in_one_figure: bool = False,
+                 plot_interval: int = 1,
                  ) -> None:
         """
         name: Name of the logger, will be used for names for the folder, do not duplicate the name with other loggers
         runtime_plotting: True means plot when a new data is added
         in_one_figure: Plot all the data point in one figure regardless of the dataloader signal.
+        plot_interval: define how often the plotting is called.
         """
         self.name = name
         self.working_dir = working_dir
@@ -488,6 +490,7 @@ class TransformerForecastPlotter:
         self.isFinished = False
         self.epoch_cnt = 0 # Epoch counter is only used when the runtime plotting is set to True
         self.in_one_figure = in_one_figure
+        self.plot_interval = plot_interval
 
         # Truth Guess is stored in the transformer prediction and truth object
         self._truth_guess_per_dataloader = [TransformerTruthAndGuess()]
@@ -591,7 +594,7 @@ class TransformerForecastPlotter:
         Signal a segment for the later plotting,
         It creates a new Transformer Prediction and Truth object
         """
-        if self.in_one_figure:
+        if not self.in_one_figure:
             self._truth_guess_per_dataloader.append(TransformerTruthAndGuess())
         return
     
@@ -606,6 +609,11 @@ class TransformerForecastPlotter:
             
         self._truth_guess_per_epoch.append(self._truth_guess_per_dataloader)
         self._truth_guess_per_dataloader = [TransformerTruthAndGuess()]
+
+        # If not at plot interval, skip the plotting
+        if self.epoch_cnt % self.plot_interval != 0 and not self.isFinished:
+            # Skip the plotting all together
+            return
 
         # Start plotting
         if not self.isFinished and self.runtime_plotting:

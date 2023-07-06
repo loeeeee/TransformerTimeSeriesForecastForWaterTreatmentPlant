@@ -4,7 +4,7 @@
 
 I am considering include the data later when the repo is ready
 
-## If you like this repo, do not forget to give it a star 
+## If you like this repo, please consider give it a star 
 
 😀
 
@@ -20,8 +20,6 @@ The fnn is mainly for fun.
 
 The rest of the code are mainly helper
 
-## This code should work, I guess
-
 ## Training image
 
 Dynamically shows the training process during the training
@@ -32,6 +30,10 @@ Dynamically shows the training process during the training
 
 ![Kernel PCA](.img/kernel_PCA.png)
 
+## Correlation
+
+![Correlation](.img/correlation.png)
+
 ## Forecast result
 
-![Forecast result](.img/train_prediction_trend_100.png)
+![Forecast result](.img/train_prediction_trend_009.png)

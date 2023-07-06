@@ -136,8 +136,8 @@ def csv_to_loader(
         print(f"Drop {colored(csv_dir, 'red' )}")
         raise Exception
     
-    src = torch.tensor(src.values)
-    tgt = torch.tensor(tgt.values).unsqueeze(1)
+    src = torch.tensor(src.values, dtype=torch.float32)
+    tgt = torch.tensor(tgt.values, dtype=torch.float32).unsqueeze(1)
     
     dataset = TransformerDataset(
         src,
@@ -237,7 +237,7 @@ def main() -> None:
     mae = nn.L1Loss()
     metrics.append(mae)
     ## Optimizer
-    lr = 0.0001  # learning rate
+    lr = 0.001  # learning rate
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
     scheduler_1 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
