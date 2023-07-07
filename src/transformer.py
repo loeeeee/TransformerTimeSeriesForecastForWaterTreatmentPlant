@@ -491,7 +491,10 @@ class TransformerForecastPlotter:
         self.runtime_plotting = runtime_plotting
         self.which_to_plot = which_to_plot
         self.isFinished = False
-        self.epoch_cnt = 0 # Epoch counter is only used when the runtime plotting is set to True
+        self.epoch_cnt = -1 
+            # Epoch counter is only used when the runtime plotting is set to True
+            # Epoch_cnt starts from -1 because when evert a new epoch is called,
+            # it will add 1 first, and starts its end-of-epoch work
         self.in_one_figure = in_one_figure
         self.plot_interval = plot_interval
 
@@ -606,6 +609,9 @@ class TransformerForecastPlotter:
         signal_new_epoch should be called at the end of the epoch, no matter if the runtime plot is set to True or False.
         Because signal_new_epoch not only plots, but also reorganize data, and signal a new epoch.
         """
+        # Count
+        self.epoch_cnt += 1
+
         # Organize data
         self._truth_guess_per_dataloader = [truth_and_guess for truth_and_guess in self._truth_guess_per_dataloader if (len(truth_and_guess.get()[0]) > 0)]
         # Remove the last unused TransformerTruthAndGuess
@@ -625,7 +631,6 @@ class TransformerForecastPlotter:
                 which_to_plot = self.which_to_plot,
                 in_one_figure = self.in_one_figure,
             )
-            self.epoch_cnt += 1
         elif self.isFinished and not self.runtime_plotting:
             # Find y_min_max in both ground truth and forecast guess
             global_min = []
