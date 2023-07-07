@@ -55,6 +55,8 @@ Dynamically shows the training process during the training
 ![Validation result](.img/epoch_77_val_prediction_trend.png)
 
 ## Folder structure
+
+~~~
 .
 ├── config
 │   └── config.json
@@ -85,3 +87,4 @@ Dynamically shows the training process during the training
 │   ├── transformer.py
 │   └── utils.py
 └── visual
+~~~
