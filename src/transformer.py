@@ -873,6 +873,7 @@ class TransformerClassifierPlotter(TransformerForecastPlotter):
                  runtime_plotting: bool = True, 
                  which_to_plot: list | None = None,
                  in_one_figure: bool = False,
+                plot_interval: int = 1,
                  ) -> None:
         """
         Because the data structure is different, a new class is needed.
@@ -883,6 +884,7 @@ class TransformerClassifierPlotter(TransformerForecastPlotter):
                          runtime_plotting, 
                          which_to_plot,
                          in_one_figure,
+                         plot_interval,
                          )
     
     def append(self, ground_truth, forecast_guess) -> None:
@@ -911,6 +913,7 @@ class TransformerForecasterVisualLogger:
                 runtime_plotting: bool = True,
                 which_to_plot: Union[None, list] = None,
                 in_one_figure: bool = False,
+                plot_interval: int = 1,
                 ) -> None:
         
         self.tfp = TransformerForecastPlotter(
@@ -920,6 +923,7 @@ class TransformerForecasterVisualLogger:
             runtime_plotting=runtime_plotting,
             which_to_plot=which_to_plot,
             in_one_figure=in_one_figure,
+            plot_interval=plot_interval,
         )
         self.tlcp = TransformerLossConsolePlotter(
             name,
@@ -960,6 +964,7 @@ class TransformerClassifierVisualLogger(TransformerForecasterVisualLogger):
                  runtime_plotting: bool = True, 
                  which_to_plot: list | None = None,
                  in_one_figure: bool = False,
+                 plot_interval: int = 1,
                  ) -> None:
         super().__init__(name, 
                          working_dir, 
@@ -967,6 +972,7 @@ class TransformerClassifierVisualLogger(TransformerForecasterVisualLogger):
                          runtime_plotting, 
                          which_to_plot,
                          in_one_figure,
+                         plot_interval,
                          )
         self.tfp = TransformerClassifierPlotter(
             name,
@@ -975,6 +981,7 @@ class TransformerClassifierVisualLogger(TransformerForecasterVisualLogger):
             runtime_plotting=runtime_plotting,
             which_to_plot=which_to_plot,
             in_one_figure=in_one_figure,
+            plot_interval=plot_interval,
         )
 
 
