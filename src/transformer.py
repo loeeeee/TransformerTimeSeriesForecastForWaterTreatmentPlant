@@ -1038,6 +1038,17 @@ class TimeSeriesTransformer(nn.Module):
         num_of_decoder_layers: literally
         """
         super().__init__()
+        # Store all the args and kwargs for restoring
+        self.args = [
+            input_size,
+        ]
+        self.kwargs = {
+            "embedding_dimension":              embedding_dimension,
+            "multi_head_attention_head_size":   multi_head_attention_head_size,
+            "num_of_encoder_layers":            num_of_encoder_layers,
+            "num_of_decoder_layers":            num_of_decoder_layers,
+            "model_name":                       model_name,
+        }
         
         self.model_name = model_name
 
@@ -1137,6 +1148,21 @@ class TimeSeriesTransformer(nn.Module):
         forecast = self.final_output(combined)
 
         return forecast
+        
+    def dump_hyper_parameters(self, dir: str) -> None:
+        """Storing hyper parameters in json files for later inference
+
+        Args:
+            dir (str): directory where the json is stored
+        """
+        args_dir = os.path.join(dir, "args.json")
+        kwargs_dir = os.path.join(dir, "kwargs.json")
+        with open(args_dir, "w", encoding="utf-8") as f:
+            json.dump(self.args, f)
+
+        with open(kwargs_dir, "w", encoding="utf-8") as f:
+            json.dump(self.kwargs, f)
+        return
     
     def learn(self,
               dataloaders: list[torch.utils.data.DataLoader],
