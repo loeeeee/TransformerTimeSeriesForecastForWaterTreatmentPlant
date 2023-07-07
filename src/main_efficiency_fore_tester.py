@@ -11,8 +11,8 @@ the pump as it is an indication of amount of chemical drug added into the pool.
 import settings # Get config
 import utils # TODO: recode this
 
-from helper import *
-from transformer import TimeSeriesTransformer, TransformerDataset, TransformerForecasterVisualLogger, transformer_collate_fn
+from helper import to_numeric_and_downcast_data, get_best_device
+from transformer import TimeSeriesTransformer, TransformerDataset, transformer_collate_fn, GREEN, BLACK, generate_square_subsequent_mask
 
 import torch
 from torch import nn
@@ -25,6 +25,7 @@ from typing import Tuple
 from termcolor import colored, cprint
 
 import os
+import re
 import sys
 import json
 
@@ -42,19 +43,19 @@ range/
 │  ├─ trans_for_23-07-07-10-02_train_loss_history.png
 │  ├─ trans_for_23-07-07-10-02_val_loss_history.png
 ├─ transformer_forecast_512_1/
+...
 """
 """
 The input data should be in folder "range" inside the model dir that needs to be tested,
 So that it can be reproduced later, even if the data processing changed
 The data needs to be split into train and validation folders *manually*
 """
-INPUT_DATA = sys.argv[1]
 # The model suppose to be store in the folder "range"
-MODEL_DIR = sys.argv[2]
-
+MODEL_DIR = sys.argv[1]
 RANGE_DIR = settings.RANGE_DIR
+DEVICE = get_best_device()
 
-print(colored(f"Read from {INPUT_DATA}", "black", "on_green"))
+print(colored(f"Read from {MODEL_DIR}", "black", "on_green"))
 print()
 
 # HYPERPARAMETER
@@ -138,7 +139,7 @@ def csv_to_loader(
     )
     return loader
 
-def load(path: str) -> list:
+def load_data(path: str) -> list[DataLoader]:
     csv_files = []
     pattern = re.compile(r'\d+')
 
@@ -174,18 +175,83 @@ def load_hyper_parameters(dir: str) -> Tuple[list, dict]:
         kwargs = json.load(f)
     return args, kwargs
 
-# Main
+def load_model(dir: str) -> Tuple[TimeSeriesTransformer, TimeSeriesTransformer]:
+    """Load model from given directory
 
+    Args:
+        dir (str): Where to load from
+
+    Returns:
+        TimeSeriesTransformer: A trained model
+    """
+    for filename in os.listdir(dir):
+        if filename.endswith('_best_trained.pt'):
+            model_dir = os.path.join(
+                dir,
+                filename
+            )
+            best_trained_model = torch.load(model_dir)
+        elif filename.endswith('.pt'):
+            model_dir = os.path.join(
+                dir,
+                filename
+            )
+            best_validated_model = torch.load(model_dir)
+    return best_trained_model, best_validated_model
+
+# Main
 def main():
     # Load data
-    vals = load(INPUT_DATA)
+    vals = load_data(MODEL_DIR)
 
     # Load hyper parameters
     args, kwargs = load_hyper_parameters(MODEL_DIR)
 
     # Load model
-    model = TimeSeriesTransformer()
+    # model = TimeSeriesTransformer(*args, **kwargs)
+    best_trained_model, best_validated_model = load_model(MODEL_DIR)
+
     # Run inference
+    # Metadata
+    total_batches = sum([len(dataloader) for dataloader in vals])
+
+    # Generate masks
+    src_mask = generate_square_subsequent_mask(
+        dim1=forecast_length,
+        dim2=knowledge_length
+        ).to(DEVICE)
+    
+    tgt_mask = generate_square_subsequent_mask(
+        dim1=forecast_length,
+        dim2=forecast_length
+        ).to(DEVICE)
+    
+    best_validated_model.eval()
+    with torch.no_grad():
+        test_loss = 0
+        correct = 0
+        bar = tqdm(
+            total       = len(vals), 
+            position    = 1,
+            colour      = GREEN,
+            )
+        batch_cnt = 0
+        for dataloader in vals:
+            for (src, tgt, tgt_y) in dataloader:
+                src, tgt, tgt_y = src.to(DEVICE), tgt.to(DEVICE), tgt_y.to(DEVICE)
+
+                pred = best_validated_model(src, tgt, src_mask, tgt_mask)
+                # TODO: Check accuracy calculation
+                correct += (pred == tgt_y).type(torch.float).sum().item()
+
+                bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)
+                batch_cnt += 1
+            bar.update()
+        bar.colour = BLACK
+        bar.close()
+    test_loss /= total_batches
+    correct /= total_batches
+
 
     # Track the performance
 
