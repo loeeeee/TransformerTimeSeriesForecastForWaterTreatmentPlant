@@ -256,7 +256,8 @@ def main() -> None:
         WORKING_DIR,
         meta_data = HYPERPARAMETER,
         runtime_plotting = True,
-        which_to_plot = [0,int(HYPERPARAMETER["forecast_length"]/2), HYPERPARAMETER["forecast_length"]-1]
+        which_to_plot = [0,int(HYPERPARAMETER["forecast_length"]/2), HYPERPARAMETER["forecast_length"]-1],
+        plot_interval = 10,
     )
     val_logger = TransformerClassifierVisualLogger(
         "val",
@@ -264,7 +265,8 @@ def main() -> None:
         meta_data = HYPERPARAMETER,
         runtime_plotting = True,
         which_to_plot = [0,int(HYPERPARAMETER["forecast_length"]/2), HYPERPARAMETER["forecast_length"]-1],
-        in_one_figure=True,
+        in_one_figure = True,
+        plot_interval = 2,
     )
     print(colored("Training:", "black", "on_green"), "\n")
     with tqdm(total=t_epoch.max_epoch, unit="epoch", position=0) as bar:
