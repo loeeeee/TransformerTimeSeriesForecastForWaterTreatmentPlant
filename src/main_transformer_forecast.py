@@ -47,6 +47,7 @@ HYPERPARAMETER = {
     "knowledge_length":     24,     # 4 hours
     "forecast_length":      6,      # 1 hour
     "batch_size":           128,    # 32 is pretty small
+    "train_val_split_ratio":0.667,
 }
 Y_COLUMNS = [
     "line 1 pump speed",
@@ -219,16 +220,19 @@ def main() -> None:
     # path = "/".join(INPUT_DATA.split('/')[:-1])
     # name = INPUT_DATA.split('/')[-1].split(".")[0]
 
-    train_loaders, val_loaders = load(INPUT_DATA, train_val_split=0.667)
+    train_loaders, val_loaders = load(INPUT_DATA, train_val_split=HYPERPARAMETER["train_val_split_ratio"])
 
     # Model
-    model = TimeSeriesTransformer(
+    model: TimeSeriesTransformer = TimeSeriesTransformer(
         INPUT_FEATURE_SIZE,
         model_name = MODEL_NAME,
         embedding_dimension = 512
     ).to(device)
     print(colored("Model structure:", "black", "on_green"), "\n")
     print(model)
+
+    # Dump hyper parameters
+    model.dump_hyper_parameters(WORKING_DIR)
 
     # Training
     loss_fn = nn.MSELoss()
@@ -345,9 +349,8 @@ def main() -> None:
     save_model(model_best_train, WORKING_DIR)
     visualize_loss(t_loss, WORKING_DIR, f"{MODEL_NAME}_val")
     visualize_loss(t_train_loss, WORKING_DIR, f"{MODEL_NAME}_train")
-    train_logger.save_data()
+    # Signal new epoch is needed for triggering non_runtime_plotting of VisualLoggers
     train_logger.signal_new_epoch()
-    val_logger.save_data()
     val_logger.signal_new_epoch()
     return
 

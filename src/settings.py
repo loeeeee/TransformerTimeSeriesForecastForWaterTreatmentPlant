@@ -7,6 +7,7 @@ CONFIG_DIR = ""
 VISUAL_DIR = ""
 SRC_DIR = ""
 MODEL_DIR = ""
+RANGE_DIR = ""
 
 def main() -> None:
     print("[INFO] Settings: Start initializing.")
@@ -45,6 +46,7 @@ def generate_default_values(DEFAULT_CONFIG_DIR):
     vars["VISUAL_DIR"] = os.path.join(vars["ROOT_DIR"], "visual/")
     vars["SRC_DIR"] = os.path.join(vars["ROOT_DIR"], "src/")
     vars["MODEL_DIR"] = os.path.join(vars["ROOT_DIR"], "model/")
+    vars["RANGE_DIR"] = os.path.join(vars["ROOT_DIR"], "range/")
     # env_vars["ROOT_DIR"] =
 
     return vars
@@ -71,6 +73,7 @@ def apply_env_from_list(env_var_list):
     check_and_create_dir(env_var_list["CONFIG_DIR"])
     check_and_create_dir(env_var_list["MODEL_DIR"])
     check_and_create_dir(env_var_list["VISUAL_DIR"])
+    check_and_create_dir(env_var_list["RANGE_DIR"])
     # Loading actual value
     for key, value in env_var_list.items():
         print("[INFO] Settings: %s - %s" % (key, value))
@@ -140,4 +143,5 @@ else:
         VISUAL_DIR  = vars["VISUAL_DIR"]
         SRC_DIR     = vars["SRC_DIR"]
         MODEL_DIR   = vars["MODEL_DIR"]
+        RANGE_DIR   = vars["RANGE_DIR"]
         isAlreadyExecuted = True

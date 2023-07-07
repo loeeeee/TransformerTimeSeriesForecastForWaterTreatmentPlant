@@ -53,3 +53,35 @@ Dynamically shows the training process during the training
 ### Validation end
 
 ![Validation result](.img/epoch_77_val_prediction_trend.png)
+
+## Folder structure
+.
+├── config
+│   └── config.json
+├── data
+├── LICENSE
+├── model
+├── quick_setup_gpu.bash
+├── range
+│   └── transformer_forecast_512
+├── README.md
+├── requirements-gpu.txt
+├── requirements.txt
+├── src
+│   ├── da_rnn.py
+│   ├── fnn.py
+│   ├── helper.py
+│   ├── main_dft.py
+│   ├── main_efficiency_fore_tester.py
+│   ├── main_fnn.py
+│   ├── main_kernel_pca.py
+│   ├── main_preporcessing.py
+│   ├── main_transformer_classifier.py
+│   ├── main_transformer_forecast.py
+│   ├── png_to_video.sh
+│   ├── rotating_donut
+│   ├── rotating_donut.c
+│   ├── settings.py
+│   ├── transformer.py
+│   └── utils.py
+└── visual
