@@ -373,6 +373,11 @@ class TransformerLossConsolePlotter:
             self._temp_loss = []
             self._x_axis.append(self._x_axis_cnt)
             self._x_axis_cnt += 1
+            
+            # Pop only if elements are added
+            if self._epoch_cnt >= 1:
+                self._loss.pop(0)
+                self._x_axis.pop(0)
 
             # Plot
             to_plot = plot(
@@ -388,9 +393,6 @@ class TransformerLossConsolePlotter:
                 tqdm.write(i)
             # Count
             self._dataloader_cnt += 1
-        if self._epoch_cnt >= 1:
-            self._loss.pop(0)
-            self._x_axis.pop(0)
         return
     
     def signal_new_epoch(self) -> None:
