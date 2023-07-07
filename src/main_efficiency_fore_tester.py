@@ -53,6 +53,7 @@ The data needs to be split into train and validation folders *manually*
 # The model suppose to be store in the folder "range"
 MODEL_DIR = sys.argv[1]
 RANGE_DIR = settings.RANGE_DIR
+ROOT_DIR = settings.ROOT_DIR
 DEVICE = get_best_device()
 
 print(colored(f"Read from {MODEL_DIR}", "black", "on_green"))
@@ -171,11 +172,11 @@ def load_hyper_parameters(dir: str) -> Tuple[list, dict]:
     with open(args_dir, "r", encoding="utf-8") as f:
         args = json.load(f)
 
-    with open(kwargs_dir, "w", encoding="utf-8") as f:
+    with open(kwargs_dir, "r", encoding="utf-8") as f:
         kwargs = json.load(f)
     return args, kwargs
 
-def load_model(dir: str) -> Tuple[TimeSeriesTransformer, TimeSeriesTransformer]:
+def load_model(dir: str, args: list, kwargs: dict, device: str) -> Tuple[TimeSeriesTransformer, TimeSeriesTransformer]:
     """Load model from given directory
 
     Args:
@@ -190,48 +191,60 @@ def load_model(dir: str) -> Tuple[TimeSeriesTransformer, TimeSeriesTransformer]:
                 dir,
                 filename
             )
-            best_trained_model = torch.load(model_dir)
+            best_trained_model = TimeSeriesTransformer(*args, **kwargs).to(device)
+            best_trained_model.load_state_dict(torch.load(model_dir))
         elif filename.endswith('.pt'):
             model_dir = os.path.join(
                 dir,
                 filename
             )
-            best_validated_model = torch.load(model_dir)
+            best_validated_model = TimeSeriesTransformer(*args, **kwargs).to(device)
+            best_validated_model.load_state_dict(torch.load(model_dir))
     return best_trained_model, best_validated_model
 
 # Main
 def main():
+    working_dir = os.path.join(
+        ROOT_DIR,
+        MODEL_DIR
+    )
     # Load data
-    vals = load_data(MODEL_DIR)
+    data_dir = os.path.join(
+        working_dir,
+        "data"
+    )
+    vals = load_data(data_dir)
 
     # Load hyper parameters
-    args, kwargs = load_hyper_parameters(MODEL_DIR)
+    args, kwargs = load_hyper_parameters(working_dir)
 
     # Load model
-    # model = TimeSeriesTransformer(*args, **kwargs)
-    best_trained_model, best_validated_model = load_model(MODEL_DIR)
+    best_trained_model, best_validated_model = load_model(working_dir, args, kwargs, DEVICE)
 
     # Run inference
     # Metadata
+    metadata = best_validated_model.get_metadata()
     total_batches = sum([len(dataloader) for dataloader in vals])
 
     # Generate masks
     src_mask = generate_square_subsequent_mask(
-        dim1=forecast_length,
-        dim2=knowledge_length
+        dim1=metadata["forecast_length"],
+        dim2=metadata["knowledge_length"]
         ).to(DEVICE)
     
     tgt_mask = generate_square_subsequent_mask(
-        dim1=forecast_length,
-        dim2=forecast_length
+        dim1=metadata["forecast_length"],
+        dim2=metadata["forecast_length"]
         ).to(DEVICE)
     
+    # Start evaluation
+    cprint("Start evaluation", "green")
     best_validated_model.eval()
     with torch.no_grad():
         test_loss = 0
         correct = 0
         bar = tqdm(
-            total       = len(vals), 
+            total       = total_batches, 
             position    = 1,
             colour      = GREEN,
             )
@@ -243,6 +256,7 @@ def main():
                 pred = best_validated_model(src, tgt, src_mask, tgt_mask)
                 # TODO: Check accuracy calculation
                 correct += (pred == tgt_y).type(torch.float).sum().item()
+                #tqdm.write(f"{pred==tgt_y}")
 
                 bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)
                 batch_cnt += 1
@@ -252,9 +266,11 @@ def main():
     test_loss /= total_batches
     correct /= total_batches
 
-
     # Track the performance
 
     # Visualize the performance
 
     return
+
+if __name__ == "__main__":
+    main()

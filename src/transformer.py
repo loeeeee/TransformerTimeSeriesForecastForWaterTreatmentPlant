@@ -1040,6 +1040,7 @@ class TimeSeriesTransformer(nn.Module):
     """
     def __init__(self, 
                  input_size: int,
+                 metadata: dict,
                  *args, 
                  embedding_dimension: int               = 512,
                  multi_head_attention_head_size: int    = 8,
@@ -1050,6 +1051,7 @@ class TimeSeriesTransformer(nn.Module):
                  ) -> None:
         """
         input_size: number of features
+        metadata: store something not used in the model, but essential to evaluation
         forecast_feature_size: number of features to forecast
         embedding_dimension: the internal dimension of the model
         multi_head_attention_head_size: number of head of the attention layer, 
@@ -1061,6 +1063,7 @@ class TimeSeriesTransformer(nn.Module):
         # Store all the args and kwargs for restoring
         self.args = [
             input_size,
+            metadata,
         ]
         self.kwargs = {
             "embedding_dimension":              embedding_dimension,
@@ -1183,6 +1186,9 @@ class TimeSeriesTransformer(nn.Module):
         with open(kwargs_dir, "w", encoding="utf-8") as f:
             json.dump(self.kwargs, f)
         return
+    
+    def get_metadata(self) -> dict:
+        return self.args[1]
     
     def learn(self,
               dataloaders: list[torch.utils.data.DataLoader],
@@ -1341,6 +1347,7 @@ class ClassifierTransformer(TimeSeriesTransformer):
     def __init__(self, 
                  input_size: int,
                  forecast_feature_size: int,
+                 metadata: dict,
                  *args, 
                  embedding_dimension: int               = 512,
                  multi_head_attention_head_size: int    = 8,
@@ -1360,7 +1367,7 @@ class ClassifierTransformer(TimeSeriesTransformer):
         """
         super().__init__(
             input_size,
-            forecast_feature_size,
+            metadata,
             *args, 
             embedding_dimension = embedding_dimension,
             multi_head_attention_head_size = multi_head_attention_head_size,
@@ -1369,6 +1376,12 @@ class ClassifierTransformer(TimeSeriesTransformer):
             model_name = model_name,
             **kwargs
         )
+        # Store all the args and kwargs for restoring
+        self.args = [
+            input_size,
+            forecast_feature_size,
+            metadata,
+        ]
         
         self.model_name = model_name
 
@@ -1383,13 +1396,6 @@ class ClassifierTransformer(TimeSeriesTransformer):
             in_features     = embedding_dimension,
             out_features    = forecast_feature_size
         )
-
-        # Classifier layer
-        """
-        self.classifier = nn.Softmax(
-            dim             = forecast_feature_size,
-        )
-        """
 
     def forward(self, 
                 src: torch.Tensor, 
@@ -1558,6 +1564,9 @@ class ClassifierTransformer(TimeSeriesTransformer):
             tqdm.write(f" {name}: {loss:>8f}")
 
         return test_loss
+        
+    def get_metadata(self) -> dict:
+        return self.args[2]
 
 """
 

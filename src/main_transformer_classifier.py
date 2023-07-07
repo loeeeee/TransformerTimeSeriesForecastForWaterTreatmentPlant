@@ -222,6 +222,7 @@ def main() -> None:
     model = ClassifierTransformer(
         INPUT_FEATURE_SIZE,
         FORECAST_FEATURE_SIZE,
+        HYPERPARAMETER,
         model_name = MODEL_NAME,
         embedding_dimension = 512
     ).to(device)

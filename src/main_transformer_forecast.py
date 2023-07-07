@@ -225,8 +225,9 @@ def main() -> None:
     # Model
     model: TimeSeriesTransformer = TimeSeriesTransformer(
         INPUT_FEATURE_SIZE,
+        HYPERPARAMETER,
         model_name = MODEL_NAME,
-        embedding_dimension = 512
+        embedding_dimension = 512,
     ).to(device)
     print(colored("Model structure:", "black", "on_green"), "\n")
     print(model)
