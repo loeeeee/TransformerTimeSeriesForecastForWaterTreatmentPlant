@@ -312,18 +312,7 @@ def create_more_data(data: pd.DataFrame) -> pd.DataFrame:
     data["time_x"] = [math.cos(t / 86400 * math.pi) for t in data.loc[:, "time"].values]
     data["time_y"] = [math.cos(t / 86400 * math.pi) for t in data.loc[:, "time"].values]
     data = data.drop(columns=["time"])
-    """
-    #  Create non-ammonia nitrogen data
-    data["inlet non-ammonia nitrogen"] = data["inlet total nitrogen"] - data["inlet ammonia nitrogen"]
-    data = data.drop(columns=["inlet total nitrogen"])
-    data["outlet non-ammonia nitrogen"] = data["outlet total nitrogen"] - data["outlet ammonia nitrogen"]
-    data = data.drop(columns=["outlet total nitrogen"])
-    # Rearrange columns
-    cols = data.columns.tolist()
-    cols = cols[13:18] + cols[:13] + cols[18:]
-    cols = cols[:8] + cols[-2:-1] + cols[8:11] + cols[-1:] + cols[11:-2]
-    data = data[cols]
-    """
+
     # Rearrange columns
     cols = data.columns.tolist()
     cols = cols[15:20] + cols[:15] + cols[20:]
@@ -384,6 +373,14 @@ def save_data_csv(path: str,
                   split: bool = True,
                   **kwarg
                   ) -> None:
+    """Save data to csv
+
+    Args:
+        path (str): directory for saving csv
+        name (str): file name, not including ".csv"
+        data (pd.DataFrame): data needs to be saved
+        split (bool, optional): Wether do train_test_split. Defaults to True.
+    """
     print(colored("Saving data", "green"))
     if not split:
         # Save
@@ -413,13 +410,31 @@ def split_data(data: pd.DataFrame) -> list[pd.DataFrame]:
     data.sort_values(by=["timestamp"], inplace=True)
     # Get the time delta
     data = data.reset_index(names="timestamp")
+
+    # DEBUG:
+    save_data_csv(DATA_DIR, "debug", data, split=False)
+
     data["timedelta"] = data["timestamp"].diff()
     # Convert the time delta column to minutes
     data['time_delta_minutes'] = data['timedelta'].astype('timedelta64[s]')
 
+    """
+    Typically normal timedelta is 10 minutes
+    However, it is possible to have 9 minutes, 11 minutes
+    I will manually filter those out, as they are not too far from 10 minutes
+    And they create too much segments
+    """
+    """
+    """
     normal_timedelta = np.timedelta64(10, 'm')
+    min_9_timedelta = np.timedelta64(9, 'm')
+    min_11_timedelta = np.timedelta64(11, 'm')
     # Filter the DataFrame for time deltas equal to 10 minutes (600s)
-    data = data[data['time_delta_minutes'] == normal_timedelta]
+    data = data[
+        (data['time_delta_minutes'] == normal_timedelta)
+        | (data['time_delta_minutes'] == min_9_timedelta)
+        | (data['time_delta_minutes'] == min_11_timedelta)
+        ]
 
     data = data.drop(columns=["timedelta", "time_delta_minutes"])
 
@@ -427,8 +442,12 @@ def split_data(data: pd.DataFrame) -> list[pd.DataFrame]:
 
     # Split data into multiple section
     data["timedelta"] = data["timestamp"].diff()
-    ## Find the indices where the time difference is greater than 10 minutes
-    split_indices = data.index[data["timedelta"] > pd.Timedelta(minutes=10)]
+    ## Find the indices where the time difference is not 10 minutes
+    split_indices = data.index[
+        (data["timedelta"] != pd.Timedelta(minutes=10))
+        & (data["timedelta"] != pd.Timedelta(minutes=9))
+        & (data["timedelta"] != pd.Timedelta(minutes=11))
+        ]
     ## Split the DataFrame into multiple DataFrames based on the split indices
     data = data.drop(columns=["timedelta"])
     dfs = np.split(data, split_indices)
@@ -548,7 +567,7 @@ def main() -> None:
     )
 
     # Split data
-    split_and_save_data(data, "segmented_data_normed")
+    # split_and_save_data(data, "segmented_data_normed")
     return
 
 if __name__ == "__main__":
