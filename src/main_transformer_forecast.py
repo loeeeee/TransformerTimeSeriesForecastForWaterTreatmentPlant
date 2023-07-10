@@ -205,40 +205,8 @@ cprint(f"Target columns: {HYPERPARAMETER['tgt_columns']}", "green")
 
 # Subprocess
 
-def train_test(dataloader: DataLoader,
-               model: TimeSeriesTransformer,
-               loss_fn: any,
-               optimizer: torch.optim,
-               device: str,
-               forecast_length: int,
-               knowledge_length: int) -> None:
-    """
-    Only for the purpose of debugging
-    """
-    tqdm.write(f"Length of the dataloader: {len(dataloader)}")
-    bar = tqdm(total=len(dataloader), position=1)
-    for i, (src, tgt, tgt_y) in enumerate(dataloader):
-        # """
-        tqdm.write(colored(i, "green", "on_red"))
-        tqdm.write(f"src shape: {src.shape}\ntgt shape: {tgt.shape}\ntgt_y shape: {tgt_y.shape}")
-        # """
-        # Generate masks
-        tgt_mask = utils.generate_square_subsequent_mask(
-            dim1=forecast_length,
-            dim2=forecast_length
-            )
-        src_mask = utils.generate_square_subsequent_mask(
-            dim1=forecast_length,
-            dim2=knowledge_length
-            )
-        tqdm.write(f"tgt_mask shape: {tgt_mask.shape}\nsrc_mask: {src_mask.shape}\n")
-        bar.update()
-    bar.close()
-    return
-
 def csv_to_loader(
         csv_dir: str,
-        skip_columns: list = [],
         ) -> torch.utils.data.DataLoader:
     # Read csv
     data = pd.read_csv(
@@ -301,7 +269,7 @@ def load(path: str, train_val_split: float=0.8) -> list:
     for csv_file in csv_files[:int(len(csv_files)*train_val_split)]:
         current_csv = os.path.join(path, csv_file)
         try:
-            train.append(csv_to_loader(current_csv, skip_columns=generate_skip_columns()))
+            train.append(csv_to_loader(current_csv))
         except Exception:
             continue
 
@@ -310,34 +278,11 @@ def load(path: str, train_val_split: float=0.8) -> list:
     for csv_file in csv_files[int(len(csv_files)*train_val_split):]:
         current_csv = os.path.join(path, csv_file)
         try:
-            val.append(csv_to_loader(current_csv, skip_columns=generate_skip_columns()))
+            val.append(csv_to_loader(current_csv))
         except Exception:
             continue
     
     return train, val
-
-"""
-year                          int8
-date_x                     float32
-date_y                     float32
-time_x                     float32
-time_y                     float32
-inlet flow                 float32
-inlet COD                  float32
-inlet ammonia nitrogen     float32
-inlet total nitrogen       float32
-inlet phosphorus           float32
-outlet COD                 float32
-outlet ammonia nitrogen    float32
-outlet total nitrogen      float32
-outlet phosphorus          float32
-line 1 nitrate nitrogen    float32
-line 2 nitrate nitrogen    float32
-line 1 pump speed          float32
-line 2 pump speed          float32
-PAC pump 1 speed           float32
-PAC pump 2 speed           float32
-"""
 
 def main() -> None:
     device = get_best_device()
@@ -410,18 +355,7 @@ def main() -> None:
                 tqdm.write(colored(f"Epoch {t_epoch.epoch()}", "green"))
                 tqdm.write(colored(f"Learning rate {lr}", "green"))
                 tqdm.write("----------------------------------")
-                """
-                train_test(
-                    train_loader, 
-                    model, 
-                    loss_fn, 
-                    optimizer, 
-                    device,
-                    HYPERPARAMETER["forecast_length"],
-                    HYPERPARAMETER["knowledge_length"]
-                    )
-                break
-                """
+
                 train_loss = model.learn(
                     train_loaders, 
                     loss_fn, 
@@ -470,6 +404,7 @@ def main() -> None:
     save_model(model_best_train, WORKING_DIR)
     visualize_loss(t_loss, WORKING_DIR, f"{MODEL_NAME}_val")
     visualize_loss(t_train_loss, WORKING_DIR, f"{MODEL_NAME}_train")
+
     # Signal new epoch is needed for triggering non_runtime_plotting of VisualLoggers
     train_logger.signal_new_epoch()
     val_logger.signal_new_epoch()

@@ -64,26 +64,7 @@ print()
 # HYPERPARAMETER
 HYPERPARAMETER = None # Load from model
 
-Y_COLUMNS = [
-    "line 1 pump speed",
-    "line 2 pump speed",
-    "PAC pump 1 speed",
-    "PAC pump 2 speed",
-]
-def generate_skip_columns():
-    """
-    Skip the one-hot label columns
-    """
-    skip_columns = []
-    for column in Y_COLUMNS:
-        for i in range(11):
-            skip_columns.append(f"{column} {i}")
-    return skip_columns
-SKIP_COLUMNS = generate_skip_columns()
-TGT_COLUMNS = "line 1 pump speed"
-
 # Helper
-
 def _get_scaled_national_standards(
         og_national_standards: dict, 
         scaling_factors: dict,
@@ -116,7 +97,6 @@ def csv_to_loader(
         csv_dir: str,
         scaling_factors: dict,
         national_standards: dict,
-        skip_columns: list = [],
         ) -> torch.utils.data.DataLoader:
     # Read csv
     data = pd.read_csv(
@@ -148,20 +128,11 @@ def csv_to_loader(
     
     # Make sure data is in ascending order by timestamp
     data.sort_values(by=["timestamp"], inplace=True)
-    
-    # Remove skip columns, skipping those information for the classifier
-    data = data.drop(
-        columns=skip_columns,
-    )
 
     # Split data
-    src = data.drop(
-        columns=Y_COLUMNS
-    )
-    src[TGT_COLUMNS] = data[TGT_COLUMNS]
-    tgt = data[TGT_COLUMNS]
-
-    print(src.head(10))
+    src = data[HYPERPARAMETER["src_columns"]]
+    tgt = data[HYPERPARAMETER["tgt_columns"]]
+    
     # Drop data that is too short for the prediction
     if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"]:
         print(f"Drop {colored(csv_dir, 'red' )}")
@@ -215,7 +186,6 @@ def load_data(
                     current_csv, 
                     scaling_factors, 
                     national_standards,
-                    skip_columns=SKIP_COLUMNS,
                     )
                 )
         except Exception:
@@ -294,17 +264,6 @@ def main():
     # Run inference
     total_batches = sum([len(dataloader) for dataloader in vals])
 
-    # Generate masks
-    src_mask = generate_square_subsequent_mask(
-        dim1=metadata["forecast_length"],
-        dim2=metadata["knowledge_length"]
-        ).to(DEVICE)
-    
-    tgt_mask = generate_square_subsequent_mask(
-        dim1=metadata["forecast_length"],
-        dim2=metadata["forecast_length"]
-        ).to(DEVICE)
-    
     # Start evaluation
     cprint("Start evaluation", "green")
     best_validated_model.eval()
@@ -329,7 +288,7 @@ def main():
             for (src, tgt, tgt_y) in dataloader:
                 src, tgt, tgt_y = src.to(DEVICE), tgt.to(DEVICE), tgt_y.to(DEVICE)
 
-                pred = best_validated_model(src, tgt, src_mask, tgt_mask)
+                pred = best_validated_model(src, tgt)
                 # TODO: Check accuracy calculation
                 test_loss += loss_fn(pred, tgt_y).item() * tgt_y.shape[1] # Multiply by batch count
                 # tqdm.write(f"{loss_fn(pred, tgt_y).item()} {tgt_y.shape}")
