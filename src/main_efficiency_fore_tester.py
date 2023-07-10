@@ -12,17 +12,19 @@ import settings # Get config
 import utils # TODO: recode this
 
 from helper import to_numeric_and_downcast_data, get_best_device
-from transformer import TimeSeriesTransformer, TransformerDataset, transformer_collate_fn, GREEN, BLACK, generate_square_subsequent_mask
+from transformer import TimeSeriesTransformer, TransformerDataset, transformer_collate_fn, GREEN, BLACK, generate_square_subsequent_mask, TransformerForecastPlotter
 
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
+import numpy as np
 import pandas as pd
 
 from tqdm import tqdm
 from typing import Tuple
 from termcolor import colored, cprint
+from sklearn.preprocessing import StandardScaler
 
 import os
 import re
@@ -60,12 +62,8 @@ print(colored(f"Read from {MODEL_DIR}", "black", "on_green"))
 print()
 
 # HYPERPARAMETER
-HYPERPARAMETER = {
-    "knowledge_length":     24,     # 4 hours
-    "forecast_length":      6,      # 1 hour
-    "batch_size":           128,    # 32 is pretty small
-    "train_val_split_ratio":0.667,
-}
+HYPERPARAMETER = None # Load from model
+
 Y_COLUMNS = [
     "line 1 pump speed",
     "line 2 pump speed",
@@ -83,12 +81,41 @@ def generate_skip_columns():
     return skip_columns
 SKIP_COLUMNS = generate_skip_columns()
 TGT_COLUMNS = "line 1 pump speed"
-INPUT_FEATURE_SIZE = 16 + 1
-FORECAST_FEATURE_SIZE = 1
+
+# Helper
+
+def _get_scaled_national_standards(
+        og_national_standards: dict, 
+        scaling_factors: dict,
+        name_mapping: dict,
+        ) -> dict:
+    """Generate scaled national standards based on the scale of the data
+
+    Args:
+        og_national_standards (dict): original national standards GB18918-2002
+        scaling_factors (dict): scaling factors for scaling the data
+        name_mapping (dict): maps column name in data to name in national standards
+
+    Returns:
+        dict: scaled national standards with its original name
+    """
+    scaled_national_standards = {}
+    for name in name_mapping:
+        scaler = StandardScaler()
+        scaler.mean_ = scaling_factors[name][0]
+        scaler.scale_ = scaling_factors[name][1]
+        scaled_national_standards[name_mapping[name]] = scaler.transform(
+            np.asarray(
+                og_national_standards[name_mapping[name]]
+            ).reshape(1, -1)
+            ).reshape(-1)[0]
+    return scaled_national_standards
 
 # Subprocess
 def csv_to_loader(
         csv_dir: str,
+        scaling_factors: dict,
+        national_standards: dict,
         skip_columns: list = [],
         ) -> torch.utils.data.DataLoader:
     # Read csv
@@ -99,6 +126,23 @@ def csv_to_loader(
         parse_dates=["timestamp"],
     )
     
+    # Scale the national standard
+    name_mapping = {
+        "outlet COD": "COD",
+        "outlet ammonia nitrogen": "ammonia nitrogen",
+        "outlet total nitrogen": "total nitrogen",
+        "outlet phosphorus": "total phosphorus",
+    }
+    scaled_national_standards = _get_scaled_national_standards(
+        national_standards,
+        scaling_factors,
+        name_mapping,
+    )
+    
+    # Apply national standards to the data
+    for data_name, std_name  in name_mapping.items():
+        data[data_name] = scaled_national_standards[std_name]
+
     # Downcast data
     data = to_numeric_and_downcast_data(data)
     
@@ -117,6 +161,7 @@ def csv_to_loader(
     src[TGT_COLUMNS] = data[TGT_COLUMNS]
     tgt = data[TGT_COLUMNS]
 
+    print(src.head(10))
     # Drop data that is too short for the prediction
     if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"]:
         print(f"Drop {colored(csv_dir, 'red' )}")
@@ -140,7 +185,12 @@ def csv_to_loader(
     )
     return loader
 
-def load_data(path: str) -> list[DataLoader]:
+def load_data(
+        path: str, 
+        scaling_factors: dict, 
+        national_standards: dict,
+        train_validation_ratio: float,
+        ) -> list[DataLoader]:
     csv_files = []
     pattern = re.compile(r'\d+')
 
@@ -157,10 +207,17 @@ def load_data(path: str) -> list[DataLoader]:
     
     # Compose validation loader
     val = []
-    for csv_file in csv_files:
+    for csv_file in csv_files: #[int(len(csv_files) * train_validation_ratio):]:
         current_csv = os.path.join(path, csv_file)
         try:
-            val.append(csv_to_loader(current_csv, skip_columns=SKIP_COLUMNS))
+            val.append(
+                csv_to_loader(
+                    current_csv, 
+                    scaling_factors, 
+                    national_standards,
+                    skip_columns=SKIP_COLUMNS,
+                    )
+                )
         except Exception:
             continue
     
@@ -204,26 +261,37 @@ def load_model(dir: str, args: list, kwargs: dict, device: str) -> Tuple[TimeSer
 
 # Main
 def main():
+    # Load data
     working_dir = os.path.join(
         ROOT_DIR,
         MODEL_DIR
     )
-    # Load data
-    data_dir = os.path.join(
-        working_dir,
-        "data"
-    )
-    vals = load_data(data_dir)
 
     # Load hyper parameters
     args, kwargs = load_hyper_parameters(working_dir)
 
     # Load model
     best_trained_model, best_validated_model = load_model(working_dir, args, kwargs, DEVICE)
-
-    # Run inference
+    
     # Metadata
     metadata = best_validated_model.get_metadata()
+    global HYPERPARAMETER
+    HYPERPARAMETER = metadata
+    
+    # Load data
+    data_dir = os.path.join(
+        working_dir,
+        "data"
+    )
+    vals = load_data(
+        data_dir, 
+        metadata["scaling_factors"], 
+        metadata["national_standards"],
+        metadata["train_val_split_ratio"],
+        )
+    cprint(f"{len(vals)}", "green")
+
+    # Run inference
     total_batches = sum([len(dataloader) for dataloader in vals])
 
     # Generate masks
@@ -240,6 +308,14 @@ def main():
     # Start evaluation
     cprint("Start evaluation", "green")
     best_validated_model.eval()
+    loss_fn = nn.L1Loss()
+    plotter = TransformerForecastPlotter(
+        "efficiency_test",
+        working_dir,
+        runtime_plotting = True,
+        which_to_plot = [0, HYPERPARAMETER["forecast_length"]-1],
+        in_one_figure = False,
+    )
     with torch.no_grad():
         test_loss = 0
         correct = 0
@@ -255,16 +331,21 @@ def main():
 
                 pred = best_validated_model(src, tgt, src_mask, tgt_mask)
                 # TODO: Check accuracy calculation
-                correct += (pred == tgt_y).type(torch.float).sum().item()
-                #tqdm.write(f"{pred==tgt_y}")
-
+                test_loss += loss_fn(pred, tgt_y).item() * tgt_y.shape[1] # Multiply by batch count
+                # tqdm.write(f"{loss_fn(pred, tgt_y).item()} {tgt_y.shape}")
+                correct += (pred == tgt_y).type(torch.int8).sum().item()
+                plotter.append(tgt_y, pred)
                 bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)
                 batch_cnt += 1
-            bar.update()
+                bar.update()
+            plotter.signal_new_dataloader()
         bar.colour = BLACK
         bar.close()
+
+    plotter.signal_new_epoch()
     test_loss /= total_batches
     correct /= total_batches
+    tqdm.write("")
 
     # Track the performance
 
