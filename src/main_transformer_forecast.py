@@ -320,7 +320,6 @@ def efficiency_test_loader(
     
     # Drop data that is too short for the prediction
     if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"]:
-        print(f"Drop {colored(csv_dir, 'red' )}")
         raise Exception
     
     src = torch.tensor(src.values, dtype=torch.float32)
@@ -379,7 +378,12 @@ def load(path: str, train_val_split: float=0.8) -> list:
     for csv_file in csv_files:
         current_csv = os.path.join(path, csv_file)
         try:
-            test.append(efficiency_test_loader(current_csv))
+            test.append(efficiency_test_loader(
+                current_csv, 
+                HYPERPARAMETER["scaling_factors"],
+                HYPERPARAMETER["national_standards"],
+                )
+                )
         except Exception:
             continue
     return train, val, test
@@ -392,7 +396,6 @@ def main() -> None:
     # name = INPUT_DATA.split('/')[-1].split(".")[0]
 
     train_loaders, val_loaders, test_loaders = load(INPUT_DATA, train_val_split=HYPERPARAMETER["train_val_split_ratio"])
-
     # Model
     model: TimeSeriesTransformer = TimeSeriesTransformer(
         INPUT_FEATURE_SIZE,
@@ -446,14 +449,6 @@ def main() -> None:
         in_one_figure = True,
         plot_interval = 2,
     )
-    test_logger = TransformerForecasterVisualLogger(
-        "test",
-        WORKING_DIR,
-        runtime_plotting = True,
-        which_to_plot = [0],
-        in_one_figure = False,
-        plot_interval = 10,
-    )
     print(colored("Training:", "black", "on_green"), "\n")
     with tqdm(total=t_epoch.max_epoch, unit="epoch", position=0) as bar:
         while True:
@@ -480,15 +475,6 @@ def main() -> None:
                     vis_logger = val_logger,
                     )
                 val_logger.signal_new_epoch()
-
-                # Use evaluation to test model efficiency
-                model.val(
-                    test_loaders, 
-                    loss_fn, 
-                    metrics,
-                    vis_logger = test_logger,
-                    )
-                test_logger.signal_new_epoch()
 
                 scheduler_0.step()
                 scheduler_1.step()
@@ -518,6 +504,40 @@ def main() -> None:
     model_best_train.model_name += "_best_trained"
     cprint(f"Best trained model has an train loss of {t_train_loss.lowest_loss}", "cyan")
 
+    # Test resulting model
+    test_logger = TransformerForecasterVisualLogger(
+        "best_eval",
+        WORKING_DIR,
+        runtime_plotting = True,
+        which_to_plot = [0],
+        in_one_figure = False,
+    )
+    # Use evaluation to test model efficiency
+    model.val(
+        test_loaders, 
+        loss_fn, 
+        metrics,
+        vis_logger = test_logger,
+        )
+    test_logger.signal_new_epoch()
+    # Test best train model
+    test_logger = TransformerForecasterVisualLogger(
+        "best_train",
+        WORKING_DIR,
+        runtime_plotting = True,
+        which_to_plot = [0],
+        in_one_figure = False,
+    )
+    # Use evaluation to test model efficiency
+    model_best_train.val(
+        test_loaders, 
+        loss_fn, 
+        metrics,
+        vis_logger = test_logger,
+        )
+    test_logger.signal_new_epoch()
+
+    # Save model
     save_model(model, WORKING_DIR)
     save_model(model_best_train, WORKING_DIR)
     visualize_loss(t_loss, WORKING_DIR, f"{MODEL_NAME}_val")

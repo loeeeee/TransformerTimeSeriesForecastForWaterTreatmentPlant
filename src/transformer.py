@@ -1042,6 +1042,9 @@ class TimeSeriesTransformer(nn.Module):
         # Store all the args and kwargs for restoring
         self.args = [
             input_size,
+            knowledge_length,
+            forecast_length,
+            device,
             metadata,
         ]
         self.kwargs = {
