@@ -291,7 +291,7 @@ def main():
                 pred = best_validated_model(src, tgt)
                 # TODO: Check accuracy calculation
                 test_loss += loss_fn(pred, tgt_y).item() * tgt_y.shape[1] # Multiply by batch count
-                # tqdm.write(f"{loss_fn(pred, tgt_y).item()} {tgt_y.shape}")
+
                 correct += (pred == tgt_y).type(torch.int8).sum().item()
                 plotter.append(tgt_y, pred)
                 bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)

@@ -12,10 +12,12 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 import pandas as pd
+import numpy as np
 
 from tqdm import tqdm
 from termcolor import colored, cprint
 from datetime import datetime
+from sklearn.preprocessing import StandardScaler
 
 import os
 import sys
@@ -203,8 +205,35 @@ FORECAST_FEATURE_SIZE = len(TGT_COLUMNS)
 cprint(f"Source columns: {HYPERPARAMETER['src_columns']}", "green")
 cprint(f"Target columns: {HYPERPARAMETER['tgt_columns']}", "green")
 
-# Subprocess
+# Helper
+def _get_scaled_national_standards(
+        og_national_standards: dict, 
+        scaling_factors: dict,
+        name_mapping: dict,
+        ) -> dict:
+    """Generate scaled national standards based on the scale of the data
 
+    Args:
+        og_national_standards (dict): original national standards GB18918-2002
+        scaling_factors (dict): scaling factors for scaling the data
+        name_mapping (dict): maps column name in data to name in national standards
+
+    Returns:
+        dict: scaled national standards with its original name
+    """
+    scaled_national_standards = {}
+    for name in name_mapping:
+        scaler = StandardScaler()
+        scaler.mean_ = scaling_factors[name][0]
+        scaler.scale_ = scaling_factors[name][1]
+        scaled_national_standards[name_mapping[name]] = scaler.transform(
+            np.asarray(
+                og_national_standards[name_mapping[name]]
+            ).reshape(1, -1)
+            ).reshape(-1)[0]
+    return scaled_national_standards
+
+# Subprocess
 def csv_to_loader(
         csv_dir: str,
         ) -> torch.utils.data.DataLoader:
@@ -249,6 +278,69 @@ def csv_to_loader(
     )
     return loader
 
+def efficiency_test_loader(
+        csv_dir: str,
+        scaling_factors: dict,
+        national_standards: dict,
+        ) -> torch.utils.data.DataLoader:
+    # Read csv
+    data = pd.read_csv(
+        csv_dir,
+        low_memory=False,
+        index_col=0,
+        parse_dates=["timestamp"],
+    )
+    
+    # Scale the national standard
+    name_mapping = {
+        "outlet COD": "COD",
+        "outlet ammonia nitrogen": "ammonia nitrogen",
+        "outlet total nitrogen": "total nitrogen",
+        "outlet phosphorus": "total phosphorus",
+    }
+    scaled_national_standards = _get_scaled_national_standards(
+        national_standards,
+        scaling_factors,
+        name_mapping,
+    )
+    
+    # Apply national standards to the data
+    for data_name, std_name  in name_mapping.items():
+        data[data_name] = scaled_national_standards[std_name]
+
+    # Downcast data
+    data = to_numeric_and_downcast_data(data)
+    
+    # Make sure data is in ascending order by timestamp
+    data.sort_values(by=["timestamp"], inplace=True)
+
+    # Split data
+    src = data[HYPERPARAMETER["src_columns"]]
+    tgt = data[HYPERPARAMETER["tgt_columns"]]
+    
+    # Drop data that is too short for the prediction
+    if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"]:
+        print(f"Drop {colored(csv_dir, 'red' )}")
+        raise Exception
+    
+    src = torch.tensor(src.values, dtype=torch.float32)
+    tgt = torch.tensor(tgt.values, dtype=torch.float32).unsqueeze(1)
+    
+    dataset = TransformerDataset(
+        src,
+        tgt,
+        HYPERPARAMETER["knowledge_length"],
+        HYPERPARAMETER["forecast_length"]
+        )
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        HYPERPARAMETER["batch_size"],
+        drop_last=False,
+        collate_fn=transformer_collate_fn
+    )
+    return loader
+
 def load(path: str, train_val_split: float=0.8) -> list:
     csv_files = []
     pattern = re.compile(r'\d+')
@@ -281,8 +373,16 @@ def load(path: str, train_val_split: float=0.8) -> list:
             val.append(csv_to_loader(current_csv))
         except Exception:
             continue
-    
-    return train, val
+
+    # Compose efficiency test loader
+    test = []
+    for csv_file in csv_files:
+        current_csv = os.path.join(path, csv_file)
+        try:
+            test.append(efficiency_test_loader(current_csv))
+        except Exception:
+            continue
+    return train, val, test
 
 def main() -> None:
     device = get_best_device()
@@ -291,7 +391,7 @@ def main() -> None:
     # path = "/".join(INPUT_DATA.split('/')[:-1])
     # name = INPUT_DATA.split('/')[-1].split(".")[0]
 
-    train_loaders, val_loaders = load(INPUT_DATA, train_val_split=HYPERPARAMETER["train_val_split_ratio"])
+    train_loaders, val_loaders, test_loaders = load(INPUT_DATA, train_val_split=HYPERPARAMETER["train_val_split_ratio"])
 
     # Model
     model: TimeSeriesTransformer = TimeSeriesTransformer(
@@ -346,6 +446,14 @@ def main() -> None:
         in_one_figure = True,
         plot_interval = 2,
     )
+    test_logger = TransformerForecasterVisualLogger(
+        "test",
+        WORKING_DIR,
+        runtime_plotting = True,
+        which_to_plot = [0],
+        in_one_figure = False,
+        plot_interval = 10,
+    )
     print(colored("Training:", "black", "on_green"), "\n")
     with tqdm(total=t_epoch.max_epoch, unit="epoch", position=0) as bar:
         while True:
@@ -372,6 +480,16 @@ def main() -> None:
                     vis_logger = val_logger,
                     )
                 val_logger.signal_new_epoch()
+
+                # Use evaluation to test model efficiency
+                model.val(
+                    test_loaders, 
+                    loss_fn, 
+                    metrics,
+                    vis_logger = test_logger,
+                    )
+                test_logger.signal_new_epoch()
+
                 scheduler_0.step()
                 scheduler_1.step()
                 # scheduler_2.step(val_loss)
