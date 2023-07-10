@@ -761,13 +761,13 @@ class TransformerForecastPlotter:
                           '#bcbd22', 
                           '#17becf'
                           ]
-        ax.plot(ground_truth, linewidth=2)
+        ax.plot(ground_truth, linewidth=1)
         ## Draw the line
         for i, c in zip(which_to_plot, default_colors):
             x_axis = [j+i+1 for j in range(len(forecast_guess[i]))]
             data = forecast_guess[i]
             label = f"{i}-unit forecast line"
-            ax.plot(x_axis, data, linewidth=1, label=label, color=c, alpha=0.5)
+            ax.plot(x_axis, data, linewidth=0.7, label=label, color=c, alpha=0.5)
             
         # Add labels and title
         ax.set_xlabel('Time')
@@ -1016,6 +1016,9 @@ class TimeSeriesTransformer(nn.Module):
     """
     def __init__(self, 
                  input_size: int,
+                 knowledge_length: int,
+                 forecast_length: int,
+                 device: str,
                  metadata: dict,
                  *args, 
                  embedding_dimension: int               = 512,
@@ -1050,6 +1053,17 @@ class TimeSeriesTransformer(nn.Module):
         }
         
         self.model_name = model_name
+        self.device = device
+        # Generate masks
+        self.src_mask = generate_square_subsequent_mask(
+            dim1=forecast_length,
+            dim2=knowledge_length
+            ).to(device)
+        
+        self.tgt_mask = generate_square_subsequent_mask(
+            dim1=forecast_length,
+            dim2=forecast_length
+            ).to(device)
 
         # Force the model only have one output feature
         _forecast_feature_size = 1
@@ -1116,9 +1130,7 @@ class TimeSeriesTransformer(nn.Module):
     
     def forward(self, 
                 src: torch.Tensor, 
-                tgt: torch.Tensor, 
-                src_mask: torch.Tensor,
-                tgt_mask: torch.Tensor
+                tgt: torch.Tensor,
                 ) -> torch.Tensor:
         # Before encoder
         src = self.encoder_input_layer(src)
@@ -1139,8 +1151,8 @@ class TimeSeriesTransformer(nn.Module):
         combined = self.decoder(
             tgt         = tgt,
             memory      = src,
-            tgt_mask    = tgt_mask,
-            memory_mask = src_mask
+            tgt_mask    = self.tgt_mask,
+            memory_mask = self.src_mask
         )
 
         # Final linear layer
@@ -1170,9 +1182,6 @@ class TimeSeriesTransformer(nn.Module):
               dataloaders: list[torch.utils.data.DataLoader],
               loss_fn: any,
               optimizer: torch.optim,
-              device: str,
-              forecast_length: int,
-              knowledge_length: int,
               vis_logger: Union[None, TransformerForecasterVisualLogger] = None,
               ) -> float:
         """
@@ -1189,29 +1198,18 @@ class TimeSeriesTransformer(nn.Module):
             colour      = GREEN,
             )
         total_loss = 0
-
-        # Generate masks
-        src_mask = generate_square_subsequent_mask(
-            dim1=forecast_length,
-            dim2=knowledge_length
-            ).to(device)
-        
-        tgt_mask = generate_square_subsequent_mask(
-            dim1=forecast_length,
-            dim2=forecast_length
-            ).to(device)
         
         # Iterate through dataloaders
         batch_cnt = 0
         for dataloader in dataloaders:
             for (src, tgt, tgt_y) in dataloader:
-                src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
+                src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
 
                 # zero the parameter gradients
                 optimizer.zero_grad()
 
                 # Make forecasts
-                prediction = self(src, tgt, src_mask, tgt_mask)
+                prediction = self(src, tgt)
 
                 # Compute and backprop loss
                 loss = loss_fn(prediction, tgt_y)
@@ -1240,11 +1238,7 @@ class TimeSeriesTransformer(nn.Module):
     def val(self,
             dataloaders: list[torch.utils.data.DataLoader],
             loss_fn: any,
-            device: str,
-            forecast_length: int,
-            knowledge_length: int,
             metrics: list,
-            working_dir: str,
             vis_logger: Union[None, TransformerForecasterVisualLogger] = None,
             ) -> float:
         """
@@ -1261,17 +1255,6 @@ class TimeSeriesTransformer(nn.Module):
         additional_loss = {}
         for additional_monitor in metrics:
             additional_loss[str(type(additional_monitor))] = 0
-
-        # Generate masks
-        src_mask = generate_square_subsequent_mask(
-            dim1=forecast_length,
-            dim2=knowledge_length
-            ).to(device)
-        
-        tgt_mask = generate_square_subsequent_mask(
-            dim1=forecast_length,
-            dim2=forecast_length
-            ).to(device)
         
         # Validation
         with torch.no_grad():
@@ -1285,9 +1268,9 @@ class TimeSeriesTransformer(nn.Module):
             batch_cnt = 0
             for dataloader in dataloaders:
                 for (src, tgt, tgt_y) in dataloader:
-                    src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
+                    src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
 
-                    pred = self(src, tgt, src_mask, tgt_mask)
+                    pred = self(src, tgt)
                     loss = loss_fn(pred, tgt_y).item()
                     test_loss += loss
                     # TODO: Check accuracy calculation
@@ -1375,20 +1358,15 @@ class ClassifierTransformer(TimeSeriesTransformer):
 
     def forward(self, 
                 src: torch.Tensor, 
-                tgt: torch.Tensor, 
-                src_mask: torch.Tensor, 
-                tgt_mask: torch.Tensor
+                tgt: torch.Tensor,
                 ) -> torch.Tensor:
-        result = super().forward(src, tgt, src_mask, tgt_mask)
+        result = super().forward(src, tgt)
         return result
     
     def learn(self,
               dataloaders: list[torch.utils.data.DataLoader],
               loss_fn: any,
               optimizer: torch.optim,
-              device: str,
-              forecast_length: int,
-              knowledge_length: int,
               vis_logger: Union[None, TransformerForecasterVisualLogger] = None,
               ) -> float:
         """
@@ -1405,29 +1383,18 @@ class ClassifierTransformer(TimeSeriesTransformer):
             colour      = GREEN,
             )
         total_loss = 0
-
-        # Generate masks
-        src_mask = generate_square_subsequent_mask(
-            dim1=forecast_length,
-            dim2=knowledge_length
-            ).to(device)
-        
-        tgt_mask = generate_square_subsequent_mask(
-            dim1=forecast_length,
-            dim2=forecast_length
-            ).to(device)
         
         # Iterate through dataloaders
         batch_cnt = 0
         for dataloader in dataloaders:
             for (src, tgt, tgt_y) in dataloader:
-                src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
+                src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
 
                 # zero the parameter gradients
                 optimizer.zero_grad()
 
                 # Make forecasts
-                prediction = self(src, tgt, src_mask, tgt_mask)
+                prediction = self(src, tgt)
 
                 # Compute and backprop loss
                 transformed_prediction = torch.permute(prediction, (1, 2, 0))
@@ -1459,11 +1426,7 @@ class ClassifierTransformer(TimeSeriesTransformer):
     def val(self,
             dataloaders: list[torch.utils.data.DataLoader],
             loss_fn: any,
-            device: str,
-            forecast_length: int,
-            knowledge_length: int,
             metrics: list,
-            working_dir: str,
             vis_logger: Union[None, TransformerForecasterVisualLogger] = None,
             ) -> float:
         """
@@ -1481,17 +1444,6 @@ class ClassifierTransformer(TimeSeriesTransformer):
         for additional_monitor in metrics:
             additional_loss[str(type(additional_monitor))] = 0
 
-        # Generate masks
-        src_mask = generate_square_subsequent_mask(
-            dim1=forecast_length,
-            dim2=knowledge_length
-            ).to(device)
-        
-        tgt_mask = generate_square_subsequent_mask(
-            dim1=forecast_length,
-            dim2=forecast_length
-            ).to(device)
-        
         # Validation
         with torch.no_grad():
             test_loss = 0
@@ -1504,9 +1456,9 @@ class ClassifierTransformer(TimeSeriesTransformer):
             batch_cnt = 0
             for dataloader in dataloaders:
                 for (src, tgt, tgt_y) in dataloader:
-                    src, tgt, tgt_y = src.to(device), tgt.to(device), tgt_y.to(device)
+                    src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
 
-                    pred = self(src, tgt, src_mask, tgt_mask)
+                    pred = self(src, tgt)
 
                     # The transformation is for the input format requirement of the CrossEntropy
                     transformed_prediction = torch.permute(pred, (1, 2, 0))

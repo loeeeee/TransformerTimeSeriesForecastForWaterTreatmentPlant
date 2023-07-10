@@ -188,7 +188,7 @@ def generate_src_columns() -> None:
 # HYPERPARAMETER
 HYPERPARAMETER = {
     "knowledge_length":     24,     # 4 hours
-    "forecast_length":      6,      # 1 hour
+    "forecast_length":      1,      # 1 hour
     "embedding_dimension":  512,
     "batch_size":           256,    # 32 is pretty small
     "train_val_split_ratio":0.667,
@@ -351,6 +351,9 @@ def main() -> None:
     # Model
     model: TimeSeriesTransformer = TimeSeriesTransformer(
         INPUT_FEATURE_SIZE,
+        HYPERPARAMETER["knowledge_length"],
+        HYPERPARAMETER["forecast_length"],
+        device,
         HYPERPARAMETER,
         model_name = MODEL_NAME,
         embedding_dimension = HYPERPARAMETER["embedding_dimension"],
@@ -387,14 +390,14 @@ def main() -> None:
         "train",
         WORKING_DIR,
         runtime_plotting = True,
-        which_to_plot = [0,int(HYPERPARAMETER["forecast_length"]/2), HYPERPARAMETER["forecast_length"]-1],
+        which_to_plot = [0],
         plot_interval = 10,
     )
     val_logger = TransformerForecasterVisualLogger(
         "val",
         WORKING_DIR,
         runtime_plotting = True,
-        which_to_plot = [0,int(HYPERPARAMETER["forecast_length"]/2), HYPERPARAMETER["forecast_length"]-1],
+        which_to_plot = [0],
         in_one_figure = True,
         plot_interval = 2,
     )
@@ -423,9 +426,6 @@ def main() -> None:
                     train_loaders, 
                     loss_fn, 
                     optimizer, 
-                    device,
-                    HYPERPARAMETER["forecast_length"],
-                    HYPERPARAMETER["knowledge_length"],
                     vis_logger = train_logger,
                 )
                 train_logger.signal_new_epoch()
@@ -434,11 +434,7 @@ def main() -> None:
                 val_loss = model.val(
                     val_loaders, 
                     loss_fn, 
-                    device,
-                    HYPERPARAMETER["forecast_length"],
-                    HYPERPARAMETER["knowledge_length"], 
                     metrics,
-                    WORKING_DIR,
                     vis_logger = val_logger,
                     )
                 val_logger.signal_new_epoch()
