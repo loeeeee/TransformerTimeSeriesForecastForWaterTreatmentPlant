@@ -42,19 +42,128 @@ print(colored(f"Read from {INPUT_DATA}", "black", "on_green"))
 print(colored(f"Save all files to {WORKING_DIR}", "black", "on_green"))
 print()
 
-# HYPERPARAMETER
-HYPERPARAMETER = {
-    "knowledge_length":     24,     # 4 hours
-    "forecast_length":      6,      # 1 hour
-    "batch_size":           128,    # 32 is pretty small
-    "train_val_split_ratio":0.667,
-}
+ALL_COLUMNS = [
+    "year",
+    "date_x",
+    "date_y",
+    "time_x",
+    "time_y",
+    "inlet flow",
+    "inlet COD",
+    "inlet ammonia nitrogen",
+    "inlet total nitrogen",
+    "inlet phosphorus",
+    "outlet COD",
+    "outlet ammonia nitrogen",
+    "outlet total nitrogen",
+    "outlet phosphorus",
+    "line 1 nitrate nitrogen",
+    "line 2 nitrate nitrogen",
+    "line 1 pump speed",
+    "line 2 pump speed",
+    "PAC pump 1 speed",
+    "PAC pump 2 speed",
+    "line 1 pump speed 0",
+    "line 1 pump speed 1",
+    "line 1 pump speed 2",
+    "line 1 pump speed 3",
+    "line 1 pump speed 4",
+    "line 1 pump speed 5",
+    "line 1 pump speed 6",
+    "line 1 pump speed 7",
+    "line 1 pump speed 8",
+    "line 1 pump speed 9",
+    "line 1 pump speed 10",
+    "line 2 pump speed 0",
+    "line 2 pump speed 1",
+    "line 2 pump speed 2",
+    "line 2 pump speed 3",
+    "line 2 pump speed 4",
+    "line 2 pump speed 5",
+    "line 2 pump speed 6",
+    "line 2 pump speed 7",
+    "line 2 pump speed 8",
+    "line 2 pump speed 9",
+    "line 2 pump speed 10",
+    "PAC pump 1 speed 0",
+    "PAC pump 1 speed 1",
+    "PAC pump 1 speed 2",
+    "PAC pump 1 speed 3",
+    "PAC pump 1 speed 4",
+    "PAC pump 1 speed 5",
+    "PAC pump 1 speed 6",
+    "PAC pump 1 speed 7",
+    "PAC pump 1 speed 8",
+    "PAC pump 1 speed 9",
+    "PAC pump 1 speed 10",
+    "PAC pump 2 speed 0",
+    "PAC pump 2 speed 1",
+    "PAC pump 2 speed 2",
+    "PAC pump 2 speed 3",
+    "PAC pump 2 speed 4",
+    "PAC pump 2 speed 5",
+    "PAC pump 2 speed 6",
+    "PAC pump 2 speed 7",
+    "PAC pump 2 speed 8",
+    "PAC pump 2 speed 9",
+    "PAC pump 2 speed 10",
+]
+
 Y_COLUMNS = [
     "line 1 pump speed",
     "line 2 pump speed",
     "PAC pump 1 speed",
     "PAC pump 2 speed",
 ]
+
+TGT_COLUMNS = "line 1 pump speed"
+
+# Read scaling factors
+def load_scaling_factors() -> dict:
+    """Load scaling factors from data/processed
+
+    Returns:
+        dict: scaling factors in dict format 
+            result:
+                column: (scaling factors, stddev)\n
+                column: (scaling factors, stddev)\n
+                column: (scaling factors, stddev)
+    """
+    data = pd.read_csv(
+        os.path.join(
+        DATA_DIR, "processed", "scaling_factors.csv"
+        ),
+        index_col=0,
+    )
+    result = {}
+    for index, row in data.iterrows():
+        result[row[0]] = (
+            row[1],
+            row[2]
+            )
+    return result
+
+def load_national_standards() -> dict:
+    """Load national standard from data/GB
+
+    Returns:
+        dict: scaling factors in dict format 
+            result:
+                chemical: standard\n
+                chemical: standard\n
+                chemical: standard
+    """
+    data = pd.read_csv(
+        os.path.join(
+        DATA_DIR, "GB18918-2002.csv"
+        ),
+        index_col=0,
+    )
+    result = {}
+    for index, row in data.iterrows():
+        result[row[0]] = row[1]
+    return result
+
 def generate_skip_columns():
     """
     Skip the one-hot label columns
@@ -64,10 +173,35 @@ def generate_skip_columns():
         for i in range(11):
             skip_columns.append(f"{column} {i}")
     return skip_columns
-SKIP_COLUMNS = generate_skip_columns()
-TGT_COLUMNS = "line 1 pump speed"
-INPUT_FEATURE_SIZE = 16 + 1
-FORECAST_FEATURE_SIZE = 1
+
+
+def generate_src_columns() -> None:
+    skip_columns = generate_skip_columns()
+    src_columns = ALL_COLUMNS.copy()
+    for column in skip_columns:
+        src_columns.remove(column)
+    for column in Y_COLUMNS:
+        src_columns.remove(column)
+    #src_columns.append(TGT_COLUMNS)
+    return src_columns
+
+# HYPERPARAMETER
+HYPERPARAMETER = {
+    "knowledge_length":     24,     # 4 hours
+    "forecast_length":      6,      # 1 hour
+    "embedding_dimension":  512,
+    "batch_size":           256,    # 32 is pretty small
+    "train_val_split_ratio":0.667,
+    "scaling_factors":      load_scaling_factors(),
+    "national_standards":   load_national_standards(),
+    "src_columns":          generate_src_columns(),
+    "tgt_columns":          TGT_COLUMNS,
+    "tgt_y_columns":        TGT_COLUMNS,
+}
+INPUT_FEATURE_SIZE = len(HYPERPARAMETER["src_columns"])
+FORECAST_FEATURE_SIZE = len(TGT_COLUMNS)
+cprint(f"Source columns: {HYPERPARAMETER['src_columns']}", "green")
+cprint(f"Target columns: {HYPERPARAMETER['tgt_columns']}", "green")
 
 # Subprocess
 
@@ -120,17 +254,9 @@ def csv_to_loader(
     # Make sure data is in ascending order by timestamp
     data.sort_values(by=["timestamp"], inplace=True)
     
-    # Remove skip columns, skipping those information for the classifier
-    data = data.drop(
-        columns=skip_columns,
-    )
-
     # Split data
-    src = data.drop(
-        columns=Y_COLUMNS
-    )
-    src[TGT_COLUMNS] = data[TGT_COLUMNS]
-    tgt = data[TGT_COLUMNS]
+    src = data[HYPERPARAMETER["src_columns"]]
+    tgt = data[HYPERPARAMETER["tgt_columns"]]
 
     # Drop data that is too short for the prediction
     if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"]:
@@ -148,7 +274,7 @@ def csv_to_loader(
         )
 
     loader = torch.utils.data.DataLoader(
-        dataset,
+        dataset,    
         HYPERPARAMETER["batch_size"],
         drop_last=False,
         collate_fn=transformer_collate_fn
@@ -175,7 +301,7 @@ def load(path: str, train_val_split: float=0.8) -> list:
     for csv_file in csv_files[:int(len(csv_files)*train_val_split)]:
         current_csv = os.path.join(path, csv_file)
         try:
-            train.append(csv_to_loader(current_csv, skip_columns=SKIP_COLUMNS))
+            train.append(csv_to_loader(current_csv, skip_columns=generate_skip_columns()))
         except Exception:
             continue
 
@@ -184,7 +310,7 @@ def load(path: str, train_val_split: float=0.8) -> list:
     for csv_file in csv_files[int(len(csv_files)*train_val_split):]:
         current_csv = os.path.join(path, csv_file)
         try:
-            val.append(csv_to_loader(current_csv, skip_columns=SKIP_COLUMNS))
+            val.append(csv_to_loader(current_csv, skip_columns=generate_skip_columns()))
         except Exception:
             continue
     
@@ -227,7 +353,7 @@ def main() -> None:
         INPUT_FEATURE_SIZE,
         HYPERPARAMETER,
         model_name = MODEL_NAME,
-        embedding_dimension = 512,
+        embedding_dimension = HYPERPARAMETER["embedding_dimension"],
     ).to(device)
     print(colored("Model structure:", "black", "on_green"), "\n")
     print(model)
@@ -260,7 +386,6 @@ def main() -> None:
     train_logger = TransformerForecasterVisualLogger(
         "train",
         WORKING_DIR,
-        meta_data = HYPERPARAMETER,
         runtime_plotting = True,
         which_to_plot = [0,int(HYPERPARAMETER["forecast_length"]/2), HYPERPARAMETER["forecast_length"]-1],
         plot_interval = 10,
@@ -268,7 +393,6 @@ def main() -> None:
     val_logger = TransformerForecasterVisualLogger(
         "val",
         WORKING_DIR,
-        meta_data = HYPERPARAMETER,
         runtime_plotting = True,
         which_to_plot = [0,int(HYPERPARAMETER["forecast_length"]/2), HYPERPARAMETER["forecast_length"]-1],
         in_one_figure = True,

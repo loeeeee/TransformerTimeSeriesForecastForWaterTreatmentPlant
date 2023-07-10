@@ -183,7 +183,6 @@ def generate_square_subsequent_mask(dim1: int, dim2: int) -> torch.Tensor:
  ╚████╔╝ ██║███████║╚██████╔╝██║  ██║███████╗██║███████╗███████╗██║  ██║
   ╚═══╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝╚══════╝╚══════╝╚═╝  ╚═╝
                                                                         
-
 """
 """
 The following part is modified from uniplot. Thanks a lot! Uniplot
@@ -482,7 +481,6 @@ class TransformerForecastPlotter:
     def __init__(self, 
                  name: str,
                  working_dir: str, 
-                 meta_data: dict = {},
                  runtime_plotting: bool = True,
                  which_to_plot: Union[None, list] = None,
                  in_one_figure: bool = False,
@@ -497,7 +495,6 @@ class TransformerForecastPlotter:
         """
         self.name = name
         self.working_dir = working_dir
-        self.metadata = meta_data
         self.runtime_plotting = runtime_plotting
         self.which_to_plot = which_to_plot
         self.isFinished = False
@@ -547,16 +544,6 @@ class TransformerForecastPlotter:
         with open(data_file_path, "w", buffering=16384, encoding="utf-8") as f:
             json.dump(unzipped_data, f)
 
-        # Process meta data
-        metadata = pd.DataFrame(
-            self.metadata,
-            index = [0],
-        )
-        metadata.to_csv(
-            os.path.join(
-            dir, "metadata.csv"
-            )
-        )
         # Set finish flag
         self.isFinished = True
         return
@@ -583,13 +570,6 @@ class TransformerForecastPlotter:
             ] 
             for epoch_data in unzipped_data
         ]
-
-        # Load metadata
-        self.metadata = pd.read_csv(
-            os.path.join(
-            dir, "metadata.csv"
-            )
-        )
         return
     
     def append(self, 
@@ -884,7 +864,6 @@ class TransformerClassifierPlotter(TransformerForecastPlotter):
     def __init__(self, 
                  name: str, 
                  working_dir: str, 
-                 meta_data: dict = {}, 
                  runtime_plotting: bool = True, 
                  which_to_plot: list | None = None,
                  in_one_figure: bool = False,
@@ -895,7 +874,6 @@ class TransformerClassifierPlotter(TransformerForecastPlotter):
         """
         super().__init__(name, 
                          working_dir, 
-                         meta_data, 
                          runtime_plotting, 
                          which_to_plot,
                          in_one_figure,
@@ -924,7 +902,6 @@ class TransformerForecasterVisualLogger:
     def __init__(self, 
                 name: str,
                 working_dir: str, 
-                meta_data: dict = {},
                 runtime_plotting: bool = True,
                 which_to_plot: Union[None, list] = None,
                 in_one_figure: bool = False,
@@ -934,7 +911,6 @@ class TransformerForecasterVisualLogger:
         self.tfp = TransformerForecastPlotter(
             name,
             working_dir,
-            meta_data=meta_data,
             runtime_plotting=runtime_plotting,
             which_to_plot=which_to_plot,
             in_one_figure=in_one_figure,
