@@ -191,9 +191,9 @@ def generate_src_columns() -> None:
 HYPERPARAMETER = {
     "knowledge_length":     72,     # 4 hours
     "forecast_length":      2,      # 1 hour
-    "embedding_dimension":  256,
+    "embedding_dimension":  2048,
     "batch_size":           128,    # 32 is pretty small
-    "train_val_split_ratio":0.2,
+    "train_val_split_ratio":0.3,
     "scaling_factors":      load_scaling_factors(),
     "national_standards":   load_national_standards(),
     "src_columns":          generate_src_columns(),
@@ -468,7 +468,7 @@ def main() -> None:
         optimizer = optimizer,
         patience = 2,
     )
-    t_epoch = TrackerEpoch(100)
+    t_epoch = TrackerEpoch(400)
     t_loss = TrackerLoss(10, model)
     t_train_loss = TrackerLoss(-1, model)
     # Validation logger

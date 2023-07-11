@@ -1304,7 +1304,8 @@ class TimeSeriesTransformer(nn.Module):
                 for (src, tgt, tgt_y) in dataloader:
                     src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
 
-                    pred = self(src, tgt)
+                    with torch.autocast(device_type=self.device):
+                        pred = self(src, tgt)
 
                     # CPU part
                     loss = loss_fn(pred, tgt_y).item()
