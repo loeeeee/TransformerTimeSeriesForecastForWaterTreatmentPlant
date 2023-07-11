@@ -20,6 +20,12 @@ import matplotlib.pyplot as plt
 GREEN = "#00af34"
 BLACK = "#ffffff"
 
+class NotEnoughData(Exception):
+    def __init__(self):            
+        # Call the base class constructor with the parameters it needs
+        super().__init__("Not enough data")
+
+
 def run_encoder_decoder_inference(
     model: nn.Module, 
     src: torch.Tensor, 
@@ -485,6 +491,7 @@ class TransformerForecastPlotter:
                  which_to_plot: Union[None, list] = None,
                  in_one_figure: bool = False,
                  plot_interval: int = 1,
+                 format: str = "png",
                  ) -> None:
         """
         name: Name of the logger, will be used for names for the folder, do not duplicate the name with other loggers
@@ -504,6 +511,7 @@ class TransformerForecastPlotter:
             # it will add 1 first, and starts its end-of-epoch work
         self.in_one_figure = in_one_figure
         self.plot_interval = plot_interval
+        self.format = format
 
         # Truth Guess is stored in the transformer prediction and truth object
         self._truth_guess_per_dataloader = [TransformerTruthAndGuess()]
@@ -620,6 +628,7 @@ class TransformerForecastPlotter:
                 idx = self.epoch_cnt,
                 which_to_plot = self.which_to_plot,
                 in_one_figure = self.in_one_figure,
+                format = self.format,
             )
         elif self.isFinished and not self.runtime_plotting:
             # Find y_min_max in both ground truth and forecast guess
@@ -665,6 +674,7 @@ class TransformerForecastPlotter:
                     which_to_plot = self.which_to_plot,
                     y_min_max= y_min_max,
                     in_one_figure = self.in_one_figure,
+                    format = self.format,
                 )
         return
         
@@ -673,6 +683,7 @@ class TransformerForecastPlotter:
                                   which_to_plot: Union[None, list] = None,
                                   y_min_max: Union[None, tuple] = None,
                                   in_one_figure: bool = False,
+                                  format: str = "png",
                                 ) -> None:
         if not in_one_figure:
             # Create subfolder for each epoch
@@ -709,6 +720,7 @@ class TransformerForecastPlotter:
                     dataloader_truth_and_guess,
                     which_to_plot=which_to_plot,
                     y_min_max=y_min_max,
+                    format=format,
                 )  
                 bar.update()
             bar.set_description("Finish plotting")
@@ -724,6 +736,7 @@ class TransformerForecastPlotter:
                 dataloader_truth_and_guess,
                 which_to_plot=which_to_plot,
                 y_min_max=y_min_max,
+                format=format,
             )
         return
     
@@ -733,6 +746,7 @@ class TransformerForecastPlotter:
                                  truth_and_guess: TransformerTruthAndGuess,
                                  which_to_plot: Union[None, list] = None,
                                  y_min_max: Union[None, tuple] = None,
+                                 format: str = "png",
                                  ) -> None:
         """
         which_to_plot: accept a list that contains the forecast sequence user would like to plot,
@@ -763,8 +777,13 @@ class TransformerForecastPlotter:
                           ]
         ax.plot(ground_truth, linewidth=1)
         ## Draw the line
+        if which_to_plot == None:
+            which_to_plot = []
+            for i in range(len(forecast_guess)):
+                which_to_plot.append(i)
+                
         for i, c in zip(which_to_plot, default_colors):
-            x_axis = [j+i+1 for j in range(len(forecast_guess[i]))]
+            x_axis = [j+i for j in range(len(forecast_guess[i]))]
             data = forecast_guess[i]
             label = f"{i}-unit forecast line"
             ax.plot(x_axis, data, linewidth=0.7, label=label, color=c, alpha=0.5)
@@ -800,10 +819,10 @@ class TransformerForecastPlotter:
         plt.savefig(
             os.path.join(
                 working_dir, 
-                f"{figure_name}.png"
+                f"{figure_name}.{format}"
                 ), 
             dpi = 400,
-            format = "png")
+            format = format)
         plt.clf()
         plt.close()
         return
@@ -1209,24 +1228,28 @@ class TimeSeriesTransformer(nn.Module):
                 src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
 
                 # zero the parameter gradients
-                optimizer.zero_grad()
+                for param in self.parameters():
+                    param.grad = None
 
                 # Make forecasts
                 prediction = self(src, tgt)
 
                 # Compute and backprop loss
                 loss = loss_fn(prediction, tgt_y)
-                total_loss += loss.item()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
 
                 # Take optimizer step
                 optimizer.step()
 
+                # CPU
+                dataloader_loss = loss.item()
+                total_loss += dataloader_loss
+                
                 # Add data to val_logger
                 if vis_logger != None:
                     vis_logger.append_to_forecast_plotter(tgt_y, prediction)
-                    vis_logger.append_to_loss_console_plotter(loss.item())
+                    vis_logger.append_to_loss_console_plotter(dataloader_loss)
 
                 bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(batch_cnt+1)):.3f}", refresh=True)
                 batch_cnt += 1
@@ -1274,6 +1297,8 @@ class TimeSeriesTransformer(nn.Module):
                     src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
 
                     pred = self(src, tgt)
+
+                    # CPU part
                     loss = loss_fn(pred, tgt_y).item()
                     test_loss += loss
                     # TODO: Check accuracy calculation
@@ -1394,7 +1419,8 @@ class ClassifierTransformer(TimeSeriesTransformer):
                 src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
 
                 # zero the parameter gradients
-                optimizer.zero_grad()
+                for param in self.parameters():
+                    param.grad = None
 
                 # Make forecasts
                 prediction = self(src, tgt)
@@ -1404,7 +1430,6 @@ class ClassifierTransformer(TimeSeriesTransformer):
                 transformed_tgt_y = torch.permute(tgt_y, (1, 2, 0))
 
                 loss = loss_fn(transformed_prediction, transformed_tgt_y)
-                total_loss += loss.item()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
 
@@ -1416,6 +1441,7 @@ class ClassifierTransformer(TimeSeriesTransformer):
                     vis_logger.append_to_forecast_plotter(tgt_y, prediction)
                     vis_logger.append_to_loss_console_plotter(loss.item())
 
+                total_loss += loss.item()
                 bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(batch_cnt+1)):.3f}", refresh=True)
                 batch_cnt += 1
                 bar.update()

@@ -5,7 +5,7 @@ import settings # Get config
 import utils # TODO: recode this
 
 from helper import *
-from transformer import TimeSeriesTransformer, TransformerDataset, TransformerForecasterVisualLogger, transformer_collate_fn
+from transformer import TimeSeriesTransformer, TransformerDataset, TransformerForecasterVisualLogger, transformer_collate_fn, NotEnoughData
 
 import torch
 from torch import nn
@@ -189,11 +189,11 @@ def generate_src_columns() -> None:
 
 # HYPERPARAMETER
 HYPERPARAMETER = {
-    "knowledge_length":     24,     # 4 hours
-    "forecast_length":      1,      # 1 hour
-    "embedding_dimension":  512,
-    "batch_size":           256,    # 32 is pretty small
-    "train_val_split_ratio":0.667,
+    "knowledge_length":     72,     # 4 hours
+    "forecast_length":      2,      # 1 hour
+    "embedding_dimension":  256,
+    "batch_size":           128,    # 32 is pretty small
+    "train_val_split_ratio":0.2,
     "scaling_factors":      load_scaling_factors(),
     "national_standards":   load_national_standards(),
     "src_columns":          generate_src_columns(),
@@ -236,6 +236,7 @@ def _get_scaled_national_standards(
 # Subprocess
 def csv_to_loader(
         csv_dir: str,
+        device: str,
         ) -> torch.utils.data.DataLoader:
     # Read csv
     data = pd.read_csv(
@@ -258,7 +259,7 @@ def csv_to_loader(
     # Drop data that is too short for the prediction
     if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"]:
         print(f"Drop {colored(csv_dir, 'red' )}")
-        raise Exception
+        raise NotEnoughData
     
     src = torch.tensor(src.values, dtype=torch.float32)
     tgt = torch.tensor(tgt.values, dtype=torch.float32).unsqueeze(1)
@@ -270,11 +271,18 @@ def csv_to_loader(
         HYPERPARAMETER["forecast_length"]
         )
 
+    if device == "cuda":
+        isPinMemory = True
+    else:
+        isPinMemory = False
+
     loader = torch.utils.data.DataLoader(
         dataset,    
         HYPERPARAMETER["batch_size"],
         drop_last=False,
-        collate_fn=transformer_collate_fn
+        collate_fn=transformer_collate_fn,
+        pin_memory = isPinMemory,
+        num_workers = os.cpu_count(),
     )
     return loader
 
@@ -282,6 +290,7 @@ def efficiency_test_loader(
         csv_dir: str,
         scaling_factors: dict,
         national_standards: dict,
+        device: str,
         ) -> torch.utils.data.DataLoader:
     # Read csv
     data = pd.read_csv(
@@ -320,7 +329,7 @@ def efficiency_test_loader(
     
     # Drop data that is too short for the prediction
     if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"]:
-        raise Exception
+        raise NotEnoughData
     
     src = torch.tensor(src.values, dtype=torch.float32)
     tgt = torch.tensor(tgt.values, dtype=torch.float32).unsqueeze(1)
@@ -332,15 +341,22 @@ def efficiency_test_loader(
         HYPERPARAMETER["forecast_length"]
         )
 
+    if device == "cuda":
+        isPinMemory = True
+    else:
+        isPinMemory = False
+
     loader = torch.utils.data.DataLoader(
         dataset,
         HYPERPARAMETER["batch_size"],
         drop_last=False,
-        collate_fn=transformer_collate_fn
+        collate_fn=transformer_collate_fn,
+        pin_memory = isPinMemory,
+        num_workers = os.cpu_count(),
     )
     return loader
 
-def load(path: str, train_val_split: float=0.8) -> list:
+def load(path: str, device: str, train_val_split: float=0.8) -> list:
     csv_files = []
     pattern = re.compile(r'\d+')
 
@@ -360,8 +376,8 @@ def load(path: str, train_val_split: float=0.8) -> list:
     for csv_file in csv_files[:int(len(csv_files)*train_val_split)]:
         current_csv = os.path.join(path, csv_file)
         try:
-            train.append(csv_to_loader(current_csv))
-        except Exception:
+            train.append(csv_to_loader(current_csv, device))
+        except NotEnoughData:
             continue
 
     # Compose validation loader
@@ -369,8 +385,8 @@ def load(path: str, train_val_split: float=0.8) -> list:
     for csv_file in csv_files[int(len(csv_files)*train_val_split):]:
         current_csv = os.path.join(path, csv_file)
         try:
-            val.append(csv_to_loader(current_csv))
-        except Exception:
+            val.append(csv_to_loader(current_csv, device))
+        except NotEnoughData:
             continue
 
     # Compose efficiency test loader
@@ -382,10 +398,28 @@ def load(path: str, train_val_split: float=0.8) -> list:
                 current_csv, 
                 HYPERPARAMETER["scaling_factors"],
                 HYPERPARAMETER["national_standards"],
+                device,
                 )
                 )
-        except Exception:
+        except NotEnoughData:
             continue
+    
+    # Scale the national standard
+    name_mapping = {
+        "outlet COD": "COD",
+        "outlet ammonia nitrogen": "ammonia nitrogen",
+        "outlet total nitrogen": "total nitrogen",
+        "outlet phosphorus": "total phosphorus",
+    }
+    scaled_national_standards = _get_scaled_national_standards(
+        HYPERPARAMETER["national_standards"],
+        HYPERPARAMETER["scaling_factors"],
+        name_mapping,
+    )
+    # Show the national standards
+    cprint(f"{scaled_national_standards}", "green")
+
+    cprint(f"{len(train)}, {len(val)}, {len(test)}", "green")
     return train, val, test
 
 def main() -> None:
@@ -395,7 +429,11 @@ def main() -> None:
     # path = "/".join(INPUT_DATA.split('/')[:-1])
     # name = INPUT_DATA.split('/')[-1].split(".")[0]
 
-    train_loaders, val_loaders, test_loaders = load(INPUT_DATA, train_val_split=HYPERPARAMETER["train_val_split_ratio"])
+    train_loaders, val_loaders, test_loaders = load(
+        INPUT_DATA, 
+        device,
+        train_val_split=HYPERPARAMETER["train_val_split_ratio"]
+        )
     # Model
     model: TimeSeriesTransformer = TimeSeriesTransformer(
         INPUT_FEATURE_SIZE,
@@ -419,9 +457,9 @@ def main() -> None:
     mae = nn.L1Loss()
     metrics.append(mae)
     ## Optimizer
-    lr = 0.001  # learning rate
+    lr = 0.01  # learning rate
     optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
+    scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.98)
     scheduler_1 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer = optimizer,
         T_0 = 5,
@@ -438,16 +476,14 @@ def main() -> None:
         "train",
         WORKING_DIR,
         runtime_plotting = True,
-        which_to_plot = [0],
-        plot_interval = 10,
+        plot_interval = 20,
     )
     val_logger = TransformerForecasterVisualLogger(
         "val",
         WORKING_DIR,
         runtime_plotting = True,
-        which_to_plot = [0],
         in_one_figure = True,
-        plot_interval = 2,
+        plot_interval = 5,
     )
     print(colored("Training:", "black", "on_green"), "\n")
     with tqdm(total=t_epoch.max_epoch, unit="epoch", position=0) as bar:
@@ -504,12 +540,21 @@ def main() -> None:
     model_best_train.model_name += "_best_trained"
     cprint(f"Best trained model has an train loss of {t_train_loss.lowest_loss}", "cyan")
 
+    # Save model
+    save_model(model, WORKING_DIR)
+    save_model(model_best_train, WORKING_DIR)
+    visualize_loss(t_loss, WORKING_DIR, f"{MODEL_NAME}_val")
+    visualize_loss(t_train_loss, WORKING_DIR, f"{MODEL_NAME}_train")
+
+    # Signal new epoch is needed for triggering non_runtime_plotting of VisualLoggers
+    train_logger.signal_new_epoch()
+    val_logger.signal_new_epoch()
+
     # Test resulting model
     test_logger = TransformerForecasterVisualLogger(
         "best_eval",
         WORKING_DIR,
         runtime_plotting = True,
-        which_to_plot = [0],
         in_one_figure = False,
     )
     # Use evaluation to test model efficiency
@@ -525,7 +570,6 @@ def main() -> None:
         "best_train",
         WORKING_DIR,
         runtime_plotting = True,
-        which_to_plot = [0],
         in_one_figure = False,
     )
     # Use evaluation to test model efficiency
@@ -536,16 +580,6 @@ def main() -> None:
         vis_logger = test_logger,
         )
     test_logger.signal_new_epoch()
-
-    # Save model
-    save_model(model, WORKING_DIR)
-    save_model(model_best_train, WORKING_DIR)
-    visualize_loss(t_loss, WORKING_DIR, f"{MODEL_NAME}_val")
-    visualize_loss(t_train_loss, WORKING_DIR, f"{MODEL_NAME}_train")
-
-    # Signal new epoch is needed for triggering non_runtime_plotting of VisualLoggers
-    train_logger.signal_new_epoch()
-    val_logger.signal_new_epoch()
     return
 
 if __name__ == "__main__":
