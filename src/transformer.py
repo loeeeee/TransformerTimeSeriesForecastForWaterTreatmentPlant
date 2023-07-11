@@ -925,6 +925,7 @@ class TransformerForecasterVisualLogger:
                 which_to_plot: Union[None, list] = None,
                 in_one_figure: bool = False,
                 plot_interval: int = 1,
+                format: str = "png",
                 ) -> None:
         
         self.tfp = TransformerForecastPlotter(
@@ -934,6 +935,7 @@ class TransformerForecasterVisualLogger:
             which_to_plot=which_to_plot,
             in_one_figure=in_one_figure,
             plot_interval=plot_interval,
+            format=format,
         )
         self.tlcp = TransformerLossConsolePlotter(
             name,
@@ -975,6 +977,7 @@ class TransformerClassifierVisualLogger(TransformerForecasterVisualLogger):
                  which_to_plot: list | None = None,
                  in_one_figure: bool = False,
                  plot_interval: int = 1,
+                 format: str = "png",
                  ) -> None:
         super().__init__(name, 
                          working_dir, 
@@ -983,6 +986,7 @@ class TransformerClassifierVisualLogger(TransformerForecasterVisualLogger):
                          which_to_plot,
                          in_one_figure,
                          plot_interval,
+                         format=format,
                          )
         self.tfp = TransformerClassifierPlotter(
             name,
@@ -992,6 +996,7 @@ class TransformerClassifierVisualLogger(TransformerForecasterVisualLogger):
             which_to_plot=which_to_plot,
             in_one_figure=in_one_figure,
             plot_interval=plot_interval,
+            format=format
         )
 
 
@@ -1230,12 +1235,15 @@ class TimeSeriesTransformer(nn.Module):
                 # zero the parameter gradients
                 for param in self.parameters():
                     param.grad = None
+                
+                # Forward
+                with torch.autocast(device_type=self.device):
+                    # Make forecasts
+                    prediction = self(src, tgt)
+                    # Compute and backprop loss
+                    loss = loss_fn(prediction, tgt_y)
 
-                # Make forecasts
-                prediction = self(src, tgt)
-
-                # Compute and backprop loss
-                loss = loss_fn(prediction, tgt_y)
+                # Backward
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
 

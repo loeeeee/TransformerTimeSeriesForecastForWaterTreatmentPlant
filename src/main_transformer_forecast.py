@@ -477,6 +477,7 @@ def main() -> None:
         WORKING_DIR,
         runtime_plotting = True,
         plot_interval = 20,
+        format="svg",
     )
     val_logger = TransformerForecasterVisualLogger(
         "val",
@@ -484,6 +485,7 @@ def main() -> None:
         runtime_plotting = True,
         in_one_figure = True,
         plot_interval = 5,
+        format="svg",
     )
     print(colored("Training:", "black", "on_green"), "\n")
     with tqdm(total=t_epoch.max_epoch, unit="epoch", position=0) as bar:
@@ -556,6 +558,7 @@ def main() -> None:
         WORKING_DIR,
         runtime_plotting = True,
         in_one_figure = False,
+        format="svg",
     )
     # Use evaluation to test model efficiency
     model.val(
@@ -571,6 +574,7 @@ def main() -> None:
         WORKING_DIR,
         runtime_plotting = True,
         in_one_figure = False,
+        format="svg",
     )
     # Use evaluation to test model efficiency
     model_best_train.val(
