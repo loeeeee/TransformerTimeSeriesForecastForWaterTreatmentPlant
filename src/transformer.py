@@ -1306,16 +1306,17 @@ class TimeSeriesTransformer(nn.Module):
 
                     with torch.autocast(device_type=self.device):
                         pred = self(src, tgt)
+                        loss = loss_fn(pred, tgt_y)
 
                     # CPU part
-                    loss = loss_fn(pred, tgt_y).item()
-                    test_loss += loss
+                    loss_item = loss.item()
+                    test_loss += loss_item
                     # TODO: Check accuracy calculation
                     correct += (pred == tgt_y).type(torch.float).sum().item()
 
                     if vis_logger != None:
                         vis_logger.append_to_forecast_plotter(tgt_y, pred)
-                        vis_logger.append_to_loss_console_plotter(loss)
+                        vis_logger.append_to_loss_console_plotter(loss_item)
 
                     for additional_monitor in metrics:
                         additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
@@ -1555,13 +1556,15 @@ class TransformerDataset(torch.utils.data.Dataset):
                  src: pd.DataFrame,
                  tgt: pd.DataFrame,
                  knowledge_length: int,
-                 forecast_length: int
+                 forecast_length: int,
+                 device: str,
                  ) -> None:
         super().__init__()
         self.src = src
         self.tgt = tgt
         self.knowledge_length = knowledge_length
         self.forecast_length = forecast_length
+        self.device = device
         return
     
     def __len__(self) -> int:
@@ -1588,7 +1591,10 @@ class TransformerDataset(torch.utils.data.Dataset):
         result_tgt = self.tgt[knowledge_start + self.knowledge_length - 1: 
                               knowledge_start + self.knowledge_length - 1 + self.forecast_length]
         result_tgt_y = self.tgt[knowledge_start + self.knowledge_length: 
-                                knowledge_start + self.knowledge_length + self.forecast_length]      
+                                knowledge_start + self.knowledge_length + self.forecast_length]
+        result_src = torch.tensor(result_src, device=self.device)
+        result_tgt = torch.tensor(result_tgt, device=self.device)
+        result_tgt_y = torch.tensor(result_tgt_y, device=self.device)
         return result_src, result_tgt, result_tgt_y
     
 

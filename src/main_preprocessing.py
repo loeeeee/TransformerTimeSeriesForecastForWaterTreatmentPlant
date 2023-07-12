@@ -320,6 +320,38 @@ def create_more_data(data: pd.DataFrame) -> pd.DataFrame:
 
     return data
 
+def create_pump_data_off_zone(data: pd.DataFrame) -> pd.DataFrame:
+    """This function deal with the problem of pump function being very discrete when off
+
+    Args:
+        data (pd.DataFrame): All the data
+
+    Returns:
+        pd.DataFrame: All the data
+    """
+    cprint("Remove 0 from covariance, making data more smooth", "green")
+    target_columns = [
+        "line 1 pump speed",
+        "line 2 pump speed",
+        "PAC pump 1 speed",
+        "PAC pump 2 speed",
+    ]
+    # Because 0 is far from other values, it is better to make it closer to other values
+    for i in target_columns:
+        # Find the second smallest value in the column
+        second_smallest = np.partition(data[i].unique(), 1)[1] * 1000
+
+        # Find the smallest value in the column
+        smallest = data[i].min()
+
+        # Report
+        cprint(f"Find the smallest value in {i}, it is {smallest}", "green")
+        cprint(f"Find the second smallest value in {i}, it is {second_smallest/1000}", "green")
+
+        # Convert all occurrences of the smallest value to the floor rounding of the second smallest value
+        data.loc[data[i] == smallest, i] = math.floor(second_smallest) / 1000
+    return data
+
 def one_hot_label(data: pd.DataFrame) -> pd.DataFrame:
     """
     Create one hot label for the data
@@ -332,6 +364,10 @@ def one_hot_label(data: pd.DataFrame) -> pd.DataFrame:
     ]
     skip_columns = []
     for i in target_columns:
+        # Temporarily store data
+        temp = data[i].copy()
+
+        # Destructive procedure for data
         data[i] *= 2
         data[i] = data[i].round(-1)
         data[i] /= 10
@@ -341,6 +377,8 @@ def one_hot_label(data: pd.DataFrame) -> pd.DataFrame:
         for j in range(0, 11): # The pump speed is expected to be in 0-50
             skip_columns.append(f"{i} {j}")
             data[f"{i} {j}"] = (data[i] == j).astype(np.uint8)
+        # Recover data
+        data[i] = temp
     
     return data, skip_columns
 
@@ -424,8 +462,7 @@ def split_data(data: pd.DataFrame) -> list[pd.DataFrame]:
     I will manually filter those out, as they are not too far from 10 minutes
     And they create too much segments
     """
-    """
-    """
+
     normal_timedelta = np.timedelta64(10, 'm')
     min_9_timedelta = np.timedelta64(9, 'm')
     min_11_timedelta = np.timedelta64(11, 'm')
@@ -555,19 +592,22 @@ def main() -> None:
     visualize_variance(data, data.columns.tolist())
     visual_data_distribution("data_distribution_normed", data)
     
+    # Remove 0 from covariance
+    data = create_pump_data_off_zone(data)
+
     # Saving data
     cprint("Saving data.", color="black", on_color="on_cyan", attrs=["blink"])
     save_data_csv(DATA_DIR,
                   "processed", 
                   data, 
-                  split=True, 
+                  split=False, 
                   **train_test_split_config)
     scaling_factors.to_csv(
-        os.path.join(DATA_DIR, "processed/scaling_factors.csv"),
+        os.path.join(DATA_DIR, "scaling_factors.csv"),
     )
 
     # Split data
-    # split_and_save_data(data, "segmented_data_normed")
+    split_and_save_data(data, "segmented_data_normed")
     return
 
 if __name__ == "__main__":

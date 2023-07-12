@@ -21,6 +21,7 @@ from sklearn.preprocessing import StandardScaler
 
 import os
 import sys
+import random
 
 INPUT_DATA = sys.argv[1]
 try:
@@ -189,16 +190,17 @@ def generate_src_columns() -> None:
 
 # HYPERPARAMETER
 HYPERPARAMETER = {
-    "knowledge_length":     72,     # 4 hours
+    "knowledge_length":     12,     # 4 hours
     "forecast_length":      2,      # 1 hour
-    "embedding_dimension":  2048,
-    "batch_size":           128,    # 32 is pretty small
-    "train_val_split_ratio":0.3,
+    "embedding_dimension":  1024,
+    "batch_size":           256,    # 32 is pretty small
+    "train_val_split_ratio":0.7,
     "scaling_factors":      load_scaling_factors(),
     "national_standards":   load_national_standards(),
     "src_columns":          generate_src_columns(),
     "tgt_columns":          TGT_COLUMNS,
     "tgt_y_columns":        TGT_COLUMNS,
+    "random_seed":          42,
 }
 INPUT_FEATURE_SIZE = len(HYPERPARAMETER["src_columns"])
 FORECAST_FEATURE_SIZE = len(TGT_COLUMNS)
@@ -268,7 +270,8 @@ def csv_to_loader(
         src,
         tgt,
         HYPERPARAMETER["knowledge_length"],
-        HYPERPARAMETER["forecast_length"]
+        HYPERPARAMETER["forecast_length"],
+        device,
         )
 
     if device == "cuda":
@@ -338,7 +341,8 @@ def efficiency_test_loader(
         src,
         tgt,
         HYPERPARAMETER["knowledge_length"],
-        HYPERPARAMETER["forecast_length"]
+        HYPERPARAMETER["forecast_length"],
+        device,
         )
 
     if device == "cuda":
@@ -372,22 +376,17 @@ def load(path: str, device: str, train_val_split: float=0.8) -> list:
         raise FileNotFoundError
     
     # Compose train loader
-    train = []
-    for csv_file in csv_files[:int(len(csv_files)*train_val_split)]:
+    train_val = []
+    for csv_file in csv_files:
         current_csv = os.path.join(path, csv_file)
         try:
-            train.append(csv_to_loader(current_csv, device))
+            train_val.append(csv_to_loader(current_csv, device))
         except NotEnoughData:
             continue
-
-    # Compose validation loader
-    val = []
-    for csv_file in csv_files[int(len(csv_files)*train_val_split):]:
-        current_csv = os.path.join(path, csv_file)
-        try:
-            val.append(csv_to_loader(current_csv, device))
-        except NotEnoughData:
-            continue
+    random.seed(HYPERPARAMETER["random_seed"])
+    random.shuffle(train_val)
+    train = train_val[:int(len(csv_files)*train_val_split)]
+    val = train_val[int(len(csv_files)*train_val_split):]
 
     # Compose efficiency test loader
     test = []
@@ -443,6 +442,8 @@ def main() -> None:
         HYPERPARAMETER,
         model_name = MODEL_NAME,
         embedding_dimension = HYPERPARAMETER["embedding_dimension"],
+        num_of_decoder_layers=8,
+        num_of_encoder_layers=8,
     ).to(device)
     print(colored("Model structure:", "black", "on_green"), "\n")
     print(model)
