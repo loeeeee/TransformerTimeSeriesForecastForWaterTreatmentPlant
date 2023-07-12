@@ -1592,9 +1592,6 @@ class TransformerDataset(torch.utils.data.Dataset):
                               knowledge_start + self.knowledge_length - 1 + self.forecast_length]
         result_tgt_y = self.tgt[knowledge_start + self.knowledge_length: 
                                 knowledge_start + self.knowledge_length + self.forecast_length]
-        result_src = torch.tensor(result_src, device=self.device)
-        result_tgt = torch.tensor(result_tgt, device=self.device)
-        result_tgt_y = torch.tensor(result_tgt_y, device=self.device)
         return result_src, result_tgt, result_tgt_y
     
 
