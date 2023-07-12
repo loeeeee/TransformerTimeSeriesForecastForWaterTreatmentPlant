@@ -134,7 +134,7 @@ def load_scaling_factors() -> dict:
     """
     data = pd.read_csv(
         os.path.join(
-        DATA_DIR, "processed", "scaling_factors.csv"
+        DATA_DIR, "scaling_factors.csv"
         ),
         index_col=0,
     )
