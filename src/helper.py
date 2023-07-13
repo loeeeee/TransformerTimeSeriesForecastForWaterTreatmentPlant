@@ -82,14 +82,17 @@ class TrackerLoss:
         if loss < self.lowest_loss:
             self.known_best_model = copy.deepcopy(model)
             self.lowest_loss = loss
-        
-        if sum(self.loss_delta[-self.patience:]) >= 0 or self.loss_delta[-1] >= 0:
-            self.patience_left -= 1
-        else:
-            self.patience_left = self.patience
 
         if self.patience == -1:
+            # Force ignore the patience
             return True
+        
+        if sum(self.loss_delta[-self.patience:]) >= 0 or self.loss_delta[-1] >= 0:
+            # When the loss is not decreasing
+            self.patience_left -= 1
+        else:
+            # When the loss decreases
+            self.patience_left = self.patience
         
         return bool(self.patience_left)
 

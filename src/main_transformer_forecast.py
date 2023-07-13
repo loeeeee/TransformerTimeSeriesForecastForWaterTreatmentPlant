@@ -532,6 +532,8 @@ def main() -> None:
             except KeyboardInterrupt:
                 tqdm.write(colored("Early stop triggered by Keyboard Input", "green", "on_red"))
                 break
+            except RuntimeError:
+                break
         bar.close()
 
     print(colored("Done!", "black", "on_green"), "\n")
@@ -550,14 +552,14 @@ def main() -> None:
     visualize_loss(t_train_loss, WORKING_DIR, f"{MODEL_NAME}_train")
 
     # Signal new epoch is needed for triggering non_runtime_plotting of VisualLoggers
-    train_logger.signal_new_epoch()
-    val_logger.signal_new_epoch()
+    train_logger.signal_finished()
+    val_logger.signal_finished()
 
     # Test resulting model
     test_logger = TransformerForecasterVisualLogger(
         "best_eval",
         WORKING_DIR,
-        runtime_plotting = True,
+        runtime_plotting = False,
         in_one_figure = False,
         format="svg",
     )
@@ -569,11 +571,12 @@ def main() -> None:
         vis_logger = test_logger,
         )
     test_logger.signal_new_epoch()
+    test_logger.signal_finished()
     # Test best train model
     test_logger = TransformerForecasterVisualLogger(
         "best_train",
         WORKING_DIR,
-        runtime_plotting = True,
+        runtime_plotting = False,
         in_one_figure = False,
         format="svg",
     )
@@ -585,6 +588,7 @@ def main() -> None:
         vis_logger = test_logger,
         )
     test_logger.signal_new_epoch()
+    test_logger.signal_finished()
     return
 
 if __name__ == "__main__":

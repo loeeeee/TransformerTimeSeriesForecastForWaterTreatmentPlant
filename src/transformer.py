@@ -477,6 +477,14 @@ class TransformerTruthAndGuess:
         When no index is passed, default being the last pair
         """
         return self._ground_truth, self._forecast_guess
+    
+    def __len__(self) -> int:
+        """Get the length of the stored data
+
+        Returns:
+            int: Length of the ground truth list
+        """
+        return len(self._ground_truth)
 
 
 class TransformerForecastPlotter:
@@ -611,7 +619,8 @@ class TransformerForecastPlotter:
         self.epoch_cnt += 1
 
         # Organize data
-        self._truth_guess_per_dataloader = [truth_and_guess for truth_and_guess in self._truth_guess_per_dataloader if (len(truth_and_guess.get()[0]) > 0)]
+        # Select the data with length greater than 0
+        self._truth_guess_per_dataloader = [truth_and_guess for truth_and_guess in self._truth_guess_per_dataloader if (len(truth_and_guess) > 0)]
         # Remove the last unused TransformerTruthAndGuess
             
         self._truth_guess_per_epoch.append(self._truth_guess_per_dataloader)
@@ -631,6 +640,9 @@ class TransformerForecastPlotter:
                 format = self.format,
             )
         elif self.isFinished and not self.runtime_plotting:
+            # Remove the last TransformerTruthAndGuess in the epoch list, because it is guaranteed to be empty
+            self._truth_guess_per_epoch.pop()
+
             # Find y_min_max in both ground truth and forecast guess
             global_min = []
             global_max = []
@@ -676,6 +688,13 @@ class TransformerForecastPlotter:
                     in_one_figure = self.in_one_figure,
                     format = self.format,
                 )
+        return
+    
+    def signal_finished(self) -> None:
+        """signal finished should be called after signal epoch when the training finishes
+        """
+        self.isFinished = True
+        self.signal_new_epoch()
         return
         
     def _plot_truth_vs_guess_init(self,
@@ -949,6 +968,10 @@ class TransformerForecasterVisualLogger:
     def signal_new_dataloader(self) -> None:
         self.tfp.signal_new_dataloader()
         self.tlcp.signal_new_dataloader()
+        return
+    
+    def signal_finished(self) -> None:
+        self.tfp.signal_finished()
         return
 
     def save_data(self, dir_overwrite: str="") -> None:
