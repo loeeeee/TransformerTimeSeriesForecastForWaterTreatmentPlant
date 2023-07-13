@@ -610,7 +610,7 @@ class TransformerForecastPlotter:
             self._truth_guess_per_dataloader.append(TransformerTruthAndGuess())
         return
     
-    def signal_new_epoch(self) -> None:
+    def signal_new_epoch(self, note: str = "") -> None:
         """
         signal_new_epoch should be called at the end of the epoch, no matter if the runtime plot is set to True or False.
         Because signal_new_epoch not only plots, but also reorganize data, and signal a new epoch.
@@ -638,6 +638,7 @@ class TransformerForecastPlotter:
                 which_to_plot = self.which_to_plot,
                 in_one_figure = self.in_one_figure,
                 format = self.format,
+                note = note,
             )
         elif self.isFinished and not self.runtime_plotting:
             # Find y_min_max in both ground truth and forecast guess
@@ -683,6 +684,7 @@ class TransformerForecastPlotter:
                     y_min_max= y_min_max,
                     in_one_figure = self.in_one_figure,
                     format = self.format,
+                    note = note,
                 )
         return
     
@@ -699,6 +701,7 @@ class TransformerForecastPlotter:
                                   y_min_max: Union[None, tuple] = None,
                                   in_one_figure: bool = False,
                                   format: str = "png",
+                                  note: str = "",
                                 ) -> None:
         if not in_one_figure:
             # Create subfolder for each epoch
@@ -736,6 +739,7 @@ class TransformerForecastPlotter:
                     which_to_plot=which_to_plot,
                     y_min_max=y_min_max,
                     format=format,
+                    note=note,
                 )  
                 bar.update()
             bar.set_description("Finish plotting")
@@ -752,6 +756,7 @@ class TransformerForecastPlotter:
                 which_to_plot=which_to_plot,
                 y_min_max=y_min_max,
                 format=format,
+                note=note,
             )
         return
     
@@ -762,6 +767,7 @@ class TransformerForecastPlotter:
                                  which_to_plot: Union[None, list] = None,
                                  y_min_max: Union[None, tuple] = None,
                                  format: str = "png",
+                                 note: str = ""
                                  ) -> None:
         """
         which_to_plot: accept a list that contains the forecast sequence user would like to plot,
@@ -773,7 +779,6 @@ class TransformerForecastPlotter:
         # Calculate MSE for 1-unit forecast
         ground_truth = np.asarray(ground_truth)
         forecast_guess = np.asarray(forecast_guess)
-        mse = (np.square(ground_truth - forecast_guess[0])).mean(axis=0)
 
         # Create a figure and axis
         fig, ax = plt.subplots()
@@ -808,7 +813,7 @@ class TransformerForecastPlotter:
         ax.set_ylabel('Data')
         ax.set_title('Prediction Trend Plot')
         plt.legend(loc="upper left")
-        plt.figtext(0, 0, f"MSE for 1 unit forecast: {mse}", color="#a41095")
+        plt.figtext(0, 0, note, color="#a41095")
 
         # Add grid lines
         ax.grid(True, linestyle='--', alpha=0.7)
@@ -962,8 +967,8 @@ class TransformerForecasterVisualLogger:
             name,
         )
 
-    def signal_new_epoch(self) -> None:
-        self.tfp.signal_new_epoch()
+    def signal_new_epoch(self, note: str="") -> None:
+        self.tfp.signal_new_epoch(note=note)
         self.tlcp.signal_new_epoch()
         return
 

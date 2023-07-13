@@ -401,7 +401,8 @@ def main() -> None:
                     optimizer, 
                     vis_logger = train_logger,
                 )
-                train_logger.signal_new_epoch()
+                note = f"{str(type(loss_fn))}: {train_loss}"
+                train_logger.signal_new_epoch(note=note)
                 bar.refresh()
 
                 val_loss = model.val(
@@ -410,7 +411,8 @@ def main() -> None:
                     metrics,
                     vis_logger = val_logger,
                     )
-                val_logger.signal_new_epoch()
+                note = f"{str(type(loss_fn))}: {val_loss}"
+                val_logger.signal_new_epoch(note=note)
 
                 scheduler_0.step()
                 scheduler_1.step()
