@@ -12,7 +12,7 @@ import settings # Get config
 import utils # TODO: recode this
 
 from helper import to_numeric_and_downcast_data, get_best_device
-from transformer import TimeSeriesTransformer, TransformerDataset, transformer_collate_fn, GREEN, BLACK, generate_square_subsequent_mask, TransformerForecastPlotter
+from transformer import TimeSeriesTransformer, TransformerDataset, transformer_collate_fn, GREEN, BLACK, generate_square_subsequent_mask, TransformerForecastPlotter, NotEnoughData
 
 import torch
 from torch import nn
@@ -93,7 +93,8 @@ def _get_scaled_national_standards(
     return scaled_national_standards
 
 # Subprocess
-def csv_to_loader(
+
+def efficiency_test_loader(
         csv_dir: str,
         scaling_factors: dict,
         national_standards: dict,
@@ -135,8 +136,7 @@ def csv_to_loader(
     
     # Drop data that is too short for the prediction
     if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"]:
-        print(f"Drop {colored(csv_dir, 'red' )}")
-        raise Exception
+        raise NotEnoughData
     
     src = torch.tensor(src.values, dtype=torch.float32)
     tgt = torch.tensor(tgt.values, dtype=torch.float32).unsqueeze(1)
@@ -145,14 +145,22 @@ def csv_to_loader(
         src,
         tgt,
         HYPERPARAMETER["knowledge_length"],
-        HYPERPARAMETER["forecast_length"]
+        HYPERPARAMETER["forecast_length"],
+        DEVICE,
         )
+
+    if DEVICE == "cuda":
+        isPinMemory = True
+    else:
+        isPinMemory = False
 
     loader = torch.utils.data.DataLoader(
         dataset,
         HYPERPARAMETER["batch_size"],
         drop_last=False,
-        collate_fn=transformer_collate_fn
+        collate_fn=transformer_collate_fn,
+        pin_memory = isPinMemory,
+        num_workers = os.cpu_count(),
     )
     return loader
 
@@ -182,13 +190,13 @@ def load_data(
         current_csv = os.path.join(path, csv_file)
         try:
             val.append(
-                csv_to_loader(
+                efficiency_test_loader(
                     current_csv, 
                     scaling_factors, 
                     national_standards,
                     )
                 )
-        except Exception:
+        except NotEnoughData:
             continue
     
     return val
@@ -203,7 +211,7 @@ def load_hyper_parameters(dir: str) -> Tuple[list, dict]:
         kwargs = json.load(f)
     return args, kwargs
 
-def load_model(dir: str, args: list, kwargs: dict, device: str) -> Tuple[TimeSeriesTransformer, TimeSeriesTransformer]:
+def load_model(dir: str, args: list, kwargs: dict) -> Tuple[TimeSeriesTransformer, TimeSeriesTransformer]:
     """Load model from given directory
 
     Args:
@@ -218,16 +226,62 @@ def load_model(dir: str, args: list, kwargs: dict, device: str) -> Tuple[TimeSer
                 dir,
                 filename
             )
-            best_trained_model = TimeSeriesTransformer(*args, **kwargs).to(device)
+            best_trained_model = TimeSeriesTransformer(*args, **kwargs).to(DEVICE)
             best_trained_model.load_state_dict(torch.load(model_dir))
         elif filename.endswith('.pt'):
             model_dir = os.path.join(
                 dir,
                 filename
             )
-            best_validated_model = TimeSeriesTransformer(*args, **kwargs).to(device)
+            best_validated_model = TimeSeriesTransformer(*args, **kwargs).to(DEVICE)
             best_validated_model.load_state_dict(torch.load(model_dir))
     return best_trained_model, best_validated_model
+
+def evaluation(model: TimeSeriesTransformer, dataloaders: DataLoader, working_dir: str) -> None:
+    # Run inference
+    total_batches = sum([len(dataloader) for dataloader in dataloaders])
+
+    cprint(f"Testing the {model.model_name} model", "green")
+    model.eval()
+    loss_fn = nn.L1Loss()
+    plotter = TransformerForecastPlotter(
+        f"{model.model_name}_test",
+        working_dir,
+        runtime_plotting = False,
+        which_to_plot = [0, HYPERPARAMETER["forecast_length"]-1],
+        in_one_figure = False,
+        format = "svg",
+    )
+    with torch.no_grad():
+        test_loss = 0
+        correct = 0
+        bar = tqdm(
+            total       = total_batches, 
+            position    = 1,
+            colour      = GREEN,
+            )
+        batch_cnt = 0
+        for dataloader in dataloaders:
+            for (src, tgt, tgt_y) in dataloader:
+                src, tgt, tgt_y = src.to(DEVICE), tgt.to(DEVICE), tgt_y.to(DEVICE)
+                                
+                with torch.autocast(device_type=DEVICE):
+                    pred = model(src, tgt)
+                    # TODO: Check accuracy calculation
+                    temp_loss = loss_fn(pred, tgt_y).item()
+
+                test_loss += temp_loss * tgt_y.shape[1] # Multiply by batch count
+
+                correct += (pred == tgt_y).type(torch.int8).sum().item()
+                plotter.append(tgt_y, pred)
+                bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)
+                batch_cnt += 1
+                bar.update()
+            plotter.signal_new_dataloader()
+        bar.colour = BLACK
+        bar.close()
+    plotter.signal_finished()
+    return
 
 # Main
 def main():
@@ -241,7 +295,7 @@ def main():
     args, kwargs = load_hyper_parameters(working_dir)
 
     # Load model
-    best_trained_model, best_validated_model = load_model(working_dir, args, kwargs, DEVICE)
+    best_trained_model, best_validated_model = load_model(working_dir, args, kwargs)
     
     # Metadata
     metadata = best_validated_model.get_metadata()
@@ -259,57 +313,12 @@ def main():
         metadata["national_standards"],
         metadata["train_val_split_ratio"],
         )
-    cprint(f"{len(vals)}", "green")
-
-    # Run inference
-    total_batches = sum([len(dataloader) for dataloader in vals])
+    cprint(f"Number of datasets: {len(vals)}", "green")
 
     # Start evaluation
     cprint("Start evaluation", "green")
-    best_validated_model.eval()
-    loss_fn = nn.L1Loss()
-    plotter = TransformerForecastPlotter(
-        "efficiency_test",
-        working_dir,
-        runtime_plotting = True,
-        which_to_plot = [0, HYPERPARAMETER["forecast_length"]-1],
-        in_one_figure = False,
-    )
-    with torch.no_grad():
-        test_loss = 0
-        correct = 0
-        bar = tqdm(
-            total       = total_batches, 
-            position    = 1,
-            colour      = GREEN,
-            )
-        batch_cnt = 0
-        for dataloader in vals:
-            for (src, tgt, tgt_y) in dataloader:
-                src, tgt, tgt_y = src.to(DEVICE), tgt.to(DEVICE), tgt_y.to(DEVICE)
-
-                pred = best_validated_model(src, tgt)
-                # TODO: Check accuracy calculation
-                test_loss += loss_fn(pred, tgt_y).item() * tgt_y.shape[1] # Multiply by batch count
-
-                correct += (pred == tgt_y).type(torch.int8).sum().item()
-                plotter.append(tgt_y, pred)
-                bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)
-                batch_cnt += 1
-                bar.update()
-            plotter.signal_new_dataloader()
-        bar.colour = BLACK
-        bar.close()
-
-    plotter.signal_new_epoch()
-    test_loss /= total_batches
-    correct /= total_batches
-    tqdm.write("")
-
-    # Track the performance
-
-    # Visualize the performance
-
+    evaluation(best_validated_model, vals, working_dir)
+    evaluation(best_trained_model, vals, working_dir)
     return
 
 if __name__ == "__main__":

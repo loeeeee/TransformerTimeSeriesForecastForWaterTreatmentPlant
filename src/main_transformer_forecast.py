@@ -348,9 +348,6 @@ def main() -> None:
     print(colored("Model structure:", "black", "on_green"), "\n")
     print(model)
 
-    # Dump hyper parameters
-    model.dump_hyper_parameters(WORKING_DIR)
-
     # Training
     loss_fn = nn.MSELoss()
     ## Additional monitoring
@@ -442,6 +439,9 @@ def main() -> None:
     model_best_train = t_train_loss.get_best_model()
     model_best_train.model_name += "_best_trained"
     cprint(f"Best trained model has an train loss of {t_train_loss.lowest_loss}", "cyan")
+
+    # Dump hyper parameters
+    model.dump_hyper_parameters(WORKING_DIR)
 
     # Save model
     save_model(model, WORKING_DIR)
