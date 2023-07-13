@@ -238,8 +238,8 @@ def csv_to_loader(
         print(f"Drop {colored(csv_dir, 'red' )}")
         raise NotEnoughData
     
-    src = torch.tensor(src.values, dtype=torch.float32)
-    tgt = torch.tensor(tgt.values, dtype=torch.float32).unsqueeze(1)
+    src = torch.tensor(src.values, dtype=torch.float32, device=device)
+    tgt = torch.tensor(tgt.values, dtype=torch.float32, device=device).unsqueeze(1)
     
     dataset = TransformerDataset(
         src,
@@ -249,17 +249,11 @@ def csv_to_loader(
         device,
         )
 
-    if device == "cuda":
-        isPinMemory = True
-    else:
-        isPinMemory = False
-
     loader = torch.utils.data.DataLoader(
         dataset,    
         HYPERPARAMETER["batch_size"],
         drop_last=False,
         collate_fn=transformer_collate_fn,
-        pin_memory = isPinMemory,
     )
     return loader
 
@@ -342,8 +336,8 @@ def main() -> None:
         HYPERPARAMETER,
         model_name = MODEL_NAME,
         embedding_dimension = HYPERPARAMETER["embedding_dimension"],
-        num_of_decoder_layers=8,
-        num_of_encoder_layers=8,
+        num_of_decoder_layers = 8,
+        num_of_encoder_layers = 8,
     ).to(device)
     print(colored("Model structure:", "black", "on_green"), "\n")
     print(model)
@@ -356,8 +350,8 @@ def main() -> None:
     metrics.append(mae)
     ## Optimizer
     lr = 0.01  # learning rate
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-    scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.98)
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+    scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
     scheduler_1 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer = optimizer,
         T_0 = 5,
@@ -401,7 +395,7 @@ def main() -> None:
                     optimizer, 
                     vis_logger = train_logger,
                 )
-                note = f"{str(type(loss_fn))}: {train_loss}"
+                note = f"{str(type(loss_fn))[7:-2].split('.')[-1]}: {train_loss}"
                 train_logger.signal_new_epoch(note=note)
                 bar.refresh()
 
@@ -411,12 +405,12 @@ def main() -> None:
                     metrics,
                     vis_logger = val_logger,
                     )
-                note = f"{str(type(loss_fn))}: {val_loss}"
+                note = f"{str(type(loss_fn))[7:-2].split('.')[-1]}: {val_loss}"
                 val_logger.signal_new_epoch(note=note)
 
                 scheduler_0.step()
                 scheduler_1.step()
-                # scheduler_2.step(val_loss)
+                scheduler_2.step(val_loss)
 
                 if not t_loss.check(val_loss, model):
                     tqdm.write(colored("Validation loss no longer decrease, finish training", "green", "on_red"))

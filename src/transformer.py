@@ -11,7 +11,7 @@ from numpy.typing import NDArray
 from termcolor import colored, cprint
 from tqdm.utils import _term_move_up
 from typing import Tuple, Union, Optional, Any, List
-from helper import create_folder_if_not_exists
+from helper import create_folder_if_not_exists, get_best_device
 
 import pandas as pd
 import numpy as np
@@ -1594,7 +1594,6 @@ class TransformerDataset(torch.utils.data.Dataset):
         self.tgt = tgt
         self.knowledge_length = knowledge_length
         self.forecast_length = forecast_length
-        self.device = device
         return
     
     def __len__(self) -> int:
@@ -1655,7 +1654,7 @@ def transformer_collate_fn(data):
     """
     result = [[], [], []]
     for i in range(3):
-        result[i] = [torch.Tensor(temp[i]) for temp in data]
+        result[i] = [temp[i] for temp in data]
         result[i] = torch.stack(result[i])
         result[i] = result[i].permute(1, 0, 2)
     return result[0], result[1], result[2]
