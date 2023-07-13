@@ -640,12 +640,10 @@ class TransformerForecastPlotter:
                 format = self.format,
             )
         elif self.isFinished and not self.runtime_plotting:
-            # Remove the last TransformerTruthAndGuess in the epoch list, because it is guaranteed to be empty
-            self._truth_guess_per_epoch.pop()
-
             # Find y_min_max in both ground truth and forecast guess
             global_min = []
             global_max = []
+            cprint("DEBUG1", "green")
             for epoch_data in self._truth_guess_per_epoch:
                 # Find the minimum and maximum of the value
                 """
@@ -655,6 +653,7 @@ class TransformerForecastPlotter:
                 [[]]: guess
                 )
                 """
+                cprint("DEBUG2", "green")
                 truth_min = min(
                     [(lambda x: min(x.get()[0]))(dataloader_data) 
                      for dataloader_data in epoch_data]
@@ -671,7 +670,8 @@ class TransformerForecastPlotter:
                     [(lambda x: self._find_maximum_value(x.get()[1]))(dataloader_data) 
                      for dataloader_data in epoch_data]
                     )
-
+                cprint("DEBUG", "green")
+                cprint(f"DEBUG: {truth_min}, {truth_max}, {guess_min}, {guess_max}", "green")
                 global_min.append(min(truth_min, guess_min))
                 global_max.append(max(truth_max, guess_max))
 
@@ -877,7 +877,10 @@ class TransformerForecastPlotter:
 
         # Iterate over each row in the matrix
         for row in matrix:
-            local_minimum = min(*row)
+            if len(row) == 1:
+                local_minimum = row[0]
+            else:
+                local_minimum = min(*row)
             if local_minimum < min_value:
                 min_value = local_minimum
 
@@ -892,7 +895,10 @@ class TransformerForecastPlotter:
 
         # Iterate over each row in the matrix
         for row in matrix:
-            local_maximum = max(*row)
+            if len(row) == 1:
+                local_maximum = row[0]
+            else:
+                local_maximum = max(*row)
             if local_maximum > max_value:
                 max_value = local_maximum
 
@@ -1226,7 +1232,7 @@ class TimeSeriesTransformer(nn.Module):
         return
     
     def get_metadata(self) -> dict:
-        return self.args[1]
+        return self.args[4]
     
     def learn(self,
               dataloaders: list[torch.utils.data.DataLoader],

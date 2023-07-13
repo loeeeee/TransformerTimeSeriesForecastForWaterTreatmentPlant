@@ -21,6 +21,7 @@ from sklearn.preprocessing import StandardScaler
 
 import os
 import sys
+import shutil
 import random
 
 INPUT_DATA = sys.argv[1]
@@ -192,8 +193,8 @@ def generate_src_columns() -> None:
 HYPERPARAMETER = {
     "knowledge_length":     12,     # 4 hours
     "forecast_length":      2,      # 1 hour
-    "embedding_dimension":  1024,
-    "batch_size":           256,    # 32 is pretty small
+    "embedding_dimension":  512,
+    "batch_size":           128,    # 32 is pretty small
     "train_val_split_ratio":0.7,
     "scaling_factors":      load_scaling_factors(),
     "national_standards":   load_national_standards(),
@@ -208,32 +209,6 @@ cprint(f"Source columns: {HYPERPARAMETER['src_columns']}", "green")
 cprint(f"Target columns: {HYPERPARAMETER['tgt_columns']}", "green")
 
 # Helper
-def _get_scaled_national_standards(
-        og_national_standards: dict, 
-        scaling_factors: dict,
-        name_mapping: dict,
-        ) -> dict:
-    """Generate scaled national standards based on the scale of the data
-
-    Args:
-        og_national_standards (dict): original national standards GB18918-2002
-        scaling_factors (dict): scaling factors for scaling the data
-        name_mapping (dict): maps column name in data to name in national standards
-
-    Returns:
-        dict: scaled national standards with its original name
-    """
-    scaled_national_standards = {}
-    for name in name_mapping:
-        scaler = StandardScaler()
-        scaler.mean_ = scaling_factors[name][0]
-        scaler.scale_ = scaling_factors[name][1]
-        scaled_national_standards[name_mapping[name]] = scaler.transform(
-            np.asarray(
-                og_national_standards[name_mapping[name]]
-            ).reshape(1, -1)
-            ).reshape(-1)[0]
-    return scaled_national_standards
 
 # Subprocess
 def csv_to_loader(
@@ -285,78 +260,6 @@ def csv_to_loader(
         drop_last=False,
         collate_fn=transformer_collate_fn,
         pin_memory = isPinMemory,
-        num_workers = os.cpu_count(),
-    )
-    return loader
-
-def efficiency_test_loader(
-        csv_dir: str,
-        scaling_factors: dict,
-        national_standards: dict,
-        device: str,
-        ) -> torch.utils.data.DataLoader:
-    # Read csv
-    data = pd.read_csv(
-        csv_dir,
-        low_memory=False,
-        index_col=0,
-        parse_dates=["timestamp"],
-    )
-    
-    # Scale the national standard
-    name_mapping = {
-        "outlet COD": "COD",
-        "outlet ammonia nitrogen": "ammonia nitrogen",
-        "outlet total nitrogen": "total nitrogen",
-        "outlet phosphorus": "total phosphorus",
-    }
-    scaled_national_standards = _get_scaled_national_standards(
-        national_standards,
-        scaling_factors,
-        name_mapping,
-    )
-    
-    # Apply national standards to the data
-    for data_name, std_name  in name_mapping.items():
-        data[data_name] = scaled_national_standards[std_name]
-
-    # Downcast data
-    data = to_numeric_and_downcast_data(data)
-    
-    # Make sure data is in ascending order by timestamp
-    data.sort_values(by=["timestamp"], inplace=True)
-
-    # Split data
-    src = data[HYPERPARAMETER["src_columns"]]
-    tgt = data[HYPERPARAMETER["tgt_columns"]]
-    
-    # Drop data that is too short for the prediction
-    if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"]:
-        raise NotEnoughData
-    
-    src = torch.tensor(src.values, dtype=torch.float32)
-    tgt = torch.tensor(tgt.values, dtype=torch.float32).unsqueeze(1)
-    
-    dataset = TransformerDataset(
-        src,
-        tgt,
-        HYPERPARAMETER["knowledge_length"],
-        HYPERPARAMETER["forecast_length"],
-        device,
-        )
-
-    if device == "cuda":
-        isPinMemory = True
-    else:
-        isPinMemory = False
-
-    loader = torch.utils.data.DataLoader(
-        dataset,
-        HYPERPARAMETER["batch_size"],
-        drop_last=False,
-        collate_fn=transformer_collate_fn,
-        pin_memory = isPinMemory,
-        num_workers = os.cpu_count(),
     )
     return loader
 
@@ -388,38 +291,35 @@ def load(path: str, device: str, train_val_split: float=0.8) -> list:
     train = train_val[:int(len(csv_files)*train_val_split)]
     val = train_val[int(len(csv_files)*train_val_split):]
 
-    # Compose efficiency test loader
-    test = []
-    for csv_file in csv_files:
-        current_csv = os.path.join(path, csv_file)
-        try:
-            test.append(efficiency_test_loader(
-                current_csv, 
-                HYPERPARAMETER["scaling_factors"],
-                HYPERPARAMETER["national_standards"],
-                device,
-                )
-                )
-        except NotEnoughData:
-            continue
-    
-    # Scale the national standard
-    name_mapping = {
-        "outlet COD": "COD",
-        "outlet ammonia nitrogen": "ammonia nitrogen",
-        "outlet total nitrogen": "total nitrogen",
-        "outlet phosphorus": "total phosphorus",
-    }
-    scaled_national_standards = _get_scaled_national_standards(
-        HYPERPARAMETER["national_standards"],
-        HYPERPARAMETER["scaling_factors"],
-        name_mapping,
-    )
-    # Show the national standards
-    cprint(f"{scaled_national_standards}", "green")
+    cprint(f"{len(train)}, {len(val)}", "green")
+    return train, val
 
-    cprint(f"{len(train)}, {len(val)}, {len(test)}", "green")
-    return train, val, test
+def save_data(
+        src: str, 
+        dst: str, 
+        symlinks: bool=False, 
+        ignore: Union[list, None]=None
+        ) -> None:
+    """Copy data to model_dir/data
+
+    Args:
+        src (str): source_dir
+        dst (str): destination_dir
+        symlinks (bool, optional): if copy symbolic link. Defaults to False.
+        ignore (Union[list, None], optional): what to ignore. Defaults to None.
+    """
+    dst = os.path.join(dst, "data")
+    create_folder_if_not_exists(dst)
+    for item in os.listdir(src):
+        s = os.path.join(src, item)
+        d = os.path.join(dst, item)
+        if os.path.isdir(s):
+            shutil.copytree(s, d, symlinks, ignore)
+        else:
+            shutil.copy2(s, d)
+    return
+
+# Main
 
 def main() -> None:
     device = get_best_device()
@@ -428,7 +328,7 @@ def main() -> None:
     # path = "/".join(INPUT_DATA.split('/')[:-1])
     # name = INPUT_DATA.split('/')[-1].split(".")[0]
 
-    train_loaders, val_loaders, test_loaders = load(
+    train_loaders, val_loaders = load(
         INPUT_DATA, 
         device,
         train_val_split=HYPERPARAMETER["train_val_split_ratio"]
@@ -469,7 +369,7 @@ def main() -> None:
         optimizer = optimizer,
         patience = 2,
     )
-    t_epoch = TrackerEpoch(400)
+    t_epoch = TrackerEpoch(300)
     t_loss = TrackerLoss(10, model)
     t_train_loss = TrackerLoss(-1, model)
     # Validation logger
@@ -532,8 +432,6 @@ def main() -> None:
             except KeyboardInterrupt:
                 tqdm.write(colored("Early stop triggered by Keyboard Input", "green", "on_red"))
                 break
-            except RuntimeError:
-                break
         bar.close()
 
     print(colored("Done!", "black", "on_green"), "\n")
@@ -551,44 +449,12 @@ def main() -> None:
     visualize_loss(t_loss, WORKING_DIR, f"{MODEL_NAME}_val")
     visualize_loss(t_train_loss, WORKING_DIR, f"{MODEL_NAME}_train")
 
+    # Save data
+    save_data(INPUT_DATA, WORKING_DIR)
+
     # Signal new epoch is needed for triggering non_runtime_plotting of VisualLoggers
     train_logger.signal_finished()
     val_logger.signal_finished()
-
-    # Test resulting model
-    test_logger = TransformerForecasterVisualLogger(
-        "best_eval",
-        WORKING_DIR,
-        runtime_plotting = False,
-        in_one_figure = False,
-        format="svg",
-    )
-    # Use evaluation to test model efficiency
-    model.val(
-        test_loaders, 
-        loss_fn, 
-        metrics,
-        vis_logger = test_logger,
-        )
-    test_logger.signal_new_epoch()
-    test_logger.signal_finished()
-    # Test best train model
-    test_logger = TransformerForecasterVisualLogger(
-        "best_train",
-        WORKING_DIR,
-        runtime_plotting = False,
-        in_one_figure = False,
-        format="svg",
-    )
-    # Use evaluation to test model efficiency
-    model_best_train.val(
-        test_loaders, 
-        loss_fn, 
-        metrics,
-        vis_logger = test_logger,
-        )
-    test_logger.signal_new_epoch()
-    test_logger.signal_finished()
     return
 
 if __name__ == "__main__":

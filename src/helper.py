@@ -87,7 +87,7 @@ class TrackerLoss:
             # Force ignore the patience
             return True
         
-        if sum(self.loss_delta[-self.patience:]) >= 0 or self.loss_delta[-1] >= 0:
+        if sum(self.loss_delta) >= 0 or self.loss_delta[-1] >= 0:
             # When the loss is not decreasing
             self.patience_left -= 1
         else:
