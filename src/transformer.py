@@ -11,7 +11,7 @@ from numpy.typing import NDArray
 from termcolor import colored, cprint
 from tqdm.utils import _term_move_up
 from typing import Tuple, Union, Optional, Any, List
-from helper import create_folder_if_not_exists, get_best_device
+from helper import create_folder_if_not_exists
 
 import pandas as pd
 import numpy as np

@@ -2,22 +2,19 @@
 This transformer code works on the fully normalized input, and multiply the loss by the scaling factors
 """
 import settings # Get config
-import utils # TODO: recode this
 
 from helper import *
 from transformer import TimeSeriesTransformer, TransformerDataset, TransformerForecasterVisualLogger, transformer_collate_fn, NotEnoughData
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
 
 import pandas as pd
-import numpy as np
 
 from tqdm import tqdm
+from typing import Literal
 from termcolor import colored, cprint
 from datetime import datetime
-from sklearn.preprocessing import StandardScaler
 
 import os
 import sys
@@ -38,6 +35,7 @@ except IndexError:
 VISUAL_DIR = settings.VISUAL_DIR
 DATA_DIR = settings.DATA_DIR
 MODEL_DIR = settings.MODEL_DIR
+DEVICE = settings.DEVICE
 
 # Create working dir
 WORKING_DIR = os.path.join(MODEL_DIR, MODEL_NAME)
@@ -47,12 +45,7 @@ print(colored(f"Read from {INPUT_DATA}", "black", "on_green"))
 print(colored(f"Save all files to {WORKING_DIR}", "black", "on_green"))
 print()
 
-ALL_COLUMNS = [
-    "year",
-    "date_x",
-    "date_y",
-    "time_x",
-    "time_y",
+RAW_COLUMNS = [
     "inlet flow",
     "inlet COD",
     "inlet ammonia nitrogen",
@@ -68,63 +61,23 @@ ALL_COLUMNS = [
     "line 2 pump speed",
     "PAC pump 1 speed",
     "PAC pump 2 speed",
-    "line 1 pump speed 0",
-    "line 1 pump speed 1",
-    "line 1 pump speed 2",
-    "line 1 pump speed 3",
-    "line 1 pump speed 4",
-    "line 1 pump speed 5",
-    "line 1 pump speed 6",
-    "line 1 pump speed 7",
-    "line 1 pump speed 8",
-    "line 1 pump speed 9",
-    "line 1 pump speed 10",
-    "line 2 pump speed 0",
-    "line 2 pump speed 1",
-    "line 2 pump speed 2",
-    "line 2 pump speed 3",
-    "line 2 pump speed 4",
-    "line 2 pump speed 5",
-    "line 2 pump speed 6",
-    "line 2 pump speed 7",
-    "line 2 pump speed 8",
-    "line 2 pump speed 9",
-    "line 2 pump speed 10",
-    "PAC pump 1 speed 0",
-    "PAC pump 1 speed 1",
-    "PAC pump 1 speed 2",
-    "PAC pump 1 speed 3",
-    "PAC pump 1 speed 4",
-    "PAC pump 1 speed 5",
-    "PAC pump 1 speed 6",
-    "PAC pump 1 speed 7",
-    "PAC pump 1 speed 8",
-    "PAC pump 1 speed 9",
-    "PAC pump 1 speed 10",
-    "PAC pump 2 speed 0",
-    "PAC pump 2 speed 1",
-    "PAC pump 2 speed 2",
-    "PAC pump 2 speed 3",
-    "PAC pump 2 speed 4",
-    "PAC pump 2 speed 5",
-    "PAC pump 2 speed 6",
-    "PAC pump 2 speed 7",
-    "PAC pump 2 speed 8",
-    "PAC pump 2 speed 9",
-    "PAC pump 2 speed 10",
 ]
 
-Y_COLUMNS = [
-    "line 1 pump speed",
-    "line 2 pump speed",
-    "PAC pump 1 speed",
-    "PAC pump 2 speed",
+TIME_COLUMNS = [
+    "year",
+    "date_x",
+    "date_y",
+    "time_x",
+    "time_y",
 ]
 
-TGT_COLUMNS = "line 1 pump speed"
+X_COLUMNS = RAW_COLUMNS[:-4]
+Y_COLUMNS = RAW_COLUMNS[-4:]
+
+TGT_COLUMNS = RAW_COLUMNS[-4]
 
 # Read scaling factors
-def load_scaling_factors() -> dict:
+def load_scaling_factors(x_or_y: Literal['x', 'y']) -> dict:
     """Load scaling factors from data/processed
 
     Returns:
@@ -135,11 +88,10 @@ def load_scaling_factors() -> dict:
                 column: (scaling factors, stddev)
     """
     scaling_factors_path = os.path.join(
-        DATA_DIR, "scaling_factors.json"
+        DATA_DIR, f"{x_or_y}_scaling_factors.json"
         )
     with open(scaling_factors_path, "r", encoding="utf-8") as f:
         data = json.load(f)
-
     return data
 
 def load_national_standards() -> dict:
@@ -163,26 +115,10 @@ def load_national_standards() -> dict:
         result[row[0]] = row[1]
     return result
 
-def generate_skip_columns():
-    """
-    Skip the one-hot label columns
-    """
-    skip_columns = []
-    for column in Y_COLUMNS:
-        for i in range(11):
-            skip_columns.append(f"{column} {i}")
-    return skip_columns
-
-
 def generate_src_columns() -> None:
-    skip_columns = generate_skip_columns()
-    src_columns = ALL_COLUMNS.copy()
-    for column in skip_columns:
-        src_columns.remove(column)
-    for column in Y_COLUMNS:
-        src_columns.remove(column)
-    #src_columns.append(TGT_COLUMNS)
-    return src_columns
+    _ = X_COLUMNS.copy()
+    _.extend(TIME_COLUMNS)
+    return _
 
 # HYPERPARAMETER
 HYPERPARAMETER = {
@@ -191,15 +127,18 @@ HYPERPARAMETER = {
     "embedding_dimension":  512,
     "batch_size":           128,    # 32 is pretty small
     "train_val_split_ratio":0.7,
-    "scaling_factors":      load_scaling_factors(),
+    "x_scaling_factors":    load_scaling_factors('x'),
+    "y_scaling_factors":    load_scaling_factors('y'),
     "national_standards":   load_national_standards(),
     "src_columns":          generate_src_columns(),
     "tgt_columns":          TGT_COLUMNS,
     "tgt_y_columns":        TGT_COLUMNS,
     "random_seed":          42,
 }
+
 INPUT_FEATURE_SIZE = len(HYPERPARAMETER["src_columns"])
 FORECAST_FEATURE_SIZE = len(TGT_COLUMNS)
+
 cprint(f"Source columns: {HYPERPARAMETER['src_columns']}", "green")
 cprint(f"Target columns: {HYPERPARAMETER['tgt_columns']}", "green")
 
@@ -311,15 +250,11 @@ def save_data(
 # Main
 
 def main() -> None:
-    device = get_best_device()
-    print(colored(f"Using {device} for training", "black", "on_green"), "\n")
-
-    # path = "/".join(INPUT_DATA.split('/')[:-1])
-    # name = INPUT_DATA.split('/')[-1].split(".")[0]
+    print(colored(f"Using {DEVICE} for training", "black", "on_green"), "\n")
 
     train_loaders, val_loaders = load(
         INPUT_DATA, 
-        device,
+        DEVICE,
         train_val_split=HYPERPARAMETER["train_val_split_ratio"]
         )
     # Model
@@ -327,13 +262,13 @@ def main() -> None:
         INPUT_FEATURE_SIZE,
         HYPERPARAMETER["knowledge_length"],
         HYPERPARAMETER["forecast_length"],
-        device,
+        DEVICE,
         HYPERPARAMETER,
         model_name = MODEL_NAME,
         embedding_dimension = HYPERPARAMETER["embedding_dimension"],
         num_of_decoder_layers = 8,
         num_of_encoder_layers = 8,
-    ).to(device)
+    ).to(DEVICE)
     print(colored("Model structure:", "black", "on_green"), "\n")
     print(model)
 

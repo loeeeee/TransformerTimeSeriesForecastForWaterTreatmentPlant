@@ -33,6 +33,7 @@ except IndexError:
 VISUAL_DIR = settings.VISUAL_DIR
 DATA_DIR = settings.DATA_DIR
 MODEL_DIR = settings.MODEL_DIR
+DEVICE = settings.DEVICE
 
 # Create working dir
 WORKING_DIR = os.path.join(MODEL_DIR, MODEL_NAME)

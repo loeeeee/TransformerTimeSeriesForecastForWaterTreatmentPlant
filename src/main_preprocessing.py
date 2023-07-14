@@ -27,16 +27,8 @@ print()
 VISUAL_DIR = settings.VISUAL_DIR
 DATA_DIR = settings.DATA_DIR
 
-train_test_split_config = {
-    "test_size": 0.1,
-    "random_state": 42,
-    "shuffle": False
-}
-
 META = {
-    "test_size": 0.1,
     "random_state": 42,
-    "shuffle": False
 }
 
 RAW_COLUMNS = [
@@ -483,7 +475,7 @@ def main() -> None:
         scaling_factors = {}
         for column in target_columns:
             # Normalization
-            transformer = QuantileTransformer(output_distribution='uniform', random_state=42)
+            transformer = QuantileTransformer(output_distribution='normal', random_state=42)
             transformed_data = transformer.fit_transform(np.reshape(np.array(data[column]), (-1, 1)))
             n_quantiles_ = transformer.n_quantiles_
             quantiles_ = transformer.quantiles_.tolist()
@@ -556,7 +548,7 @@ def main() -> None:
                   "processed", 
                   data, 
                   split=False, 
-                  **train_test_split_config)
+                  )
     x_scaling_factors_path = os.path.join(DATA_DIR, "x_scaling_factors.json")
     with open(x_scaling_factors_path, "w", encoding="utf-8") as f:
         json.dump(x_scaling_factors, f, indent=2)

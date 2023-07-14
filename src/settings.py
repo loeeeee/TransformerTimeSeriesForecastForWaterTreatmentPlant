@@ -1,4 +1,5 @@
 import json
+import torch
 import os
 
 ROOT_DIR = ""
@@ -9,6 +10,7 @@ VISUAL_DIR = ""
 SRC_DIR = ""
 MODEL_DIR = ""
 RANGE_DIR = ""
+DEVICE = ""
 
 def main() -> None:
     print("[INFO] Settings: Start initializing.")
@@ -49,6 +51,7 @@ def generate_default_values(DEFAULT_CONFIG_DIR):
     vars["SRC_DIR"] = os.path.join(vars["ROOT_DIR"], "src/")
     vars["MODEL_DIR"] = os.path.join(vars["ROOT_DIR"], "model/")
     vars["RANGE_DIR"] = os.path.join(vars["ROOT_DIR"], "range/")
+    vars["DEVICE"] = _get_best_device()
     # env_vars["ROOT_DIR"] =
 
     return vars
@@ -133,6 +136,16 @@ def check_and_create_dir(DIR):
 
     return
 
+def _get_best_device() -> str:
+    # Get cpu, gpu or mps device for training.
+    device = (
+        "cuda"
+        if torch.cuda.is_available()
+        else "mps"
+        if torch.backends.mps.is_available()
+        else "cpu"
+        )
+    return device
 
 isAlreadyExecuted = False
 if __name__ == "__main__":
@@ -142,10 +155,11 @@ else:
         vars = main()
         ROOT_DIR    = vars["ROOT_DIR"]
         DATA_DIR    = vars["DATA_DIR"]
-        RAW_DIR    = vars["RAW_DIR"]
+        RAW_DIR     = vars["RAW_DIR"]
         CONFIG_DIR  = vars["CONFIG_DIR"]
         VISUAL_DIR  = vars["VISUAL_DIR"]
         SRC_DIR     = vars["SRC_DIR"]
         MODEL_DIR   = vars["MODEL_DIR"]
         RANGE_DIR   = vars["RANGE_DIR"]
+        DEVICE      = vars["DEVICE"]
         isAlreadyExecuted = True

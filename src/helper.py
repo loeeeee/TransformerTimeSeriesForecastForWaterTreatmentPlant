@@ -102,18 +102,6 @@ class TrackerLoss:
     def get_loss_history(self) -> list:
         return self.loss
 
-       
-def get_best_device() -> str:
-    # Get cpu, gpu or mps device for training.
-    device = (
-        "cuda"
-        if torch.cuda.is_available()
-        else "mps"
-        if torch.backends.mps.is_available()
-        else "cpu"
-        )
-    return device
-
 def is_ne_in_df(df:pd.DataFrame):
     """
     Some raw data files contain cells with "n/e". This function checks whether
