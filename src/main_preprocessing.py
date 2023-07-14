@@ -21,6 +21,9 @@ from sklearn.model_selection import train_test_split
 from helper import console_general_data_info, create_folder_if_not_exists, new_remove
 
 INPUT_DATA = sys.argv[1]
+print(colored(f"Read from {INPUT_DATA}", "black", "on_green"))
+print()
+
 VISUAL_DIR = settings.VISUAL_DIR
 DATA_DIR = settings.DATA_DIR
 
@@ -30,21 +33,41 @@ train_test_split_config = {
     "shuffle": False
 }
 
-print(f"Read from {INPUT_DATA}")
+META = {
+    "test_size": 0.1,
+    "random_state": 42,
+    "shuffle": False
+}
 
-def mkdir_if_not_exist(path: str) -> bool:
-    """
-    Create folder if it does not exist
-    Return if the folder is newly created
-    """
-    if not (isExist := os.path.exists(path)):
-        os.mkdir(path)
-    return not isExist
+RAW_COLUMNS = [
+    "inlet flow",
+    "inlet COD",
+    "inlet ammonia nitrogen",
+    "inlet total nitrogen",
+    "inlet phosphorus",
+    "outlet COD",
+    "outlet ammonia nitrogen",
+    "outlet total nitrogen",
+    "outlet phosphorus",
+    "line 1 nitrate nitrogen",
+    "line 2 nitrate nitrogen",
+    "line 1 pump speed",
+    "line 2 pump speed",
+    "PAC pump 1 speed",
+    "PAC pump 2 speed",
+]
 
-def visual_data_distribution(saving_dir: str, data: pd.DataFrame) -> None:
+X_COLUMNS = RAW_COLUMNS[:-4]
+Y_COLUMNS = RAW_COLUMNS[-4:]
+
+TGT_COLUMNS = RAW_COLUMNS[-4]
+
+# Helper
+
+def _visual_data_distribution(saving_dir: str, data: pd.DataFrame) -> None:
     # Data distribution analysis
     data_distribution_dir = f"{VISUAL_DIR}/{saving_dir}"
-    mkdir_if_not_exist(data_distribution_dir)
+    create_folder_if_not_exists(data_distribution_dir)
     bar = tqdm(total=data.shape[1])
     for index, column in enumerate(data):
         try:
@@ -58,7 +81,7 @@ def visual_data_distribution(saving_dir: str, data: pd.DataFrame) -> None:
         bar.update()
     return
 
-def visualize_variance(
+def _visualize_variance(
         data: pd.DataFrame,
         target_columns: list,
         ) -> None:
@@ -81,7 +104,7 @@ def visualize_variance(
     print(tb.tabulate(infos, header))
     print()
 
-def visualize_count_zeros(data: pd.DataFrame) -> None:
+def _visualize_count_zeros(data: pd.DataFrame) -> None:
     # Count zero values in each features
     print(colored("Counting zeros in each feature", "green"))
     zero_cnts = []
@@ -90,7 +113,7 @@ def visualize_count_zeros(data: pd.DataFrame) -> None:
     print(tb.tabulate(zero_cnts, ["Col", "Zeros"]))
     print()
 
-def visualize_correlation(data: pd.DataFrame) -> None:
+def _visualize_correlation(data: pd.DataFrame) -> None:
     # Data relation and correlationship anaylsis
     correlation_matrix = data.corr(numeric_only=True)
     mask = correlation_matrix.apply(lambda row: all(row.isin([0, np.nan])), axis=1)
@@ -119,7 +142,7 @@ def visualize_correlation(data: pd.DataFrame) -> None:
    
     # data =  data.drop(columns = ["f4", "f18", "f12"])
 
-def visualize_data_trend(name: str, data: pd.DataFrame) -> None:
+def _visualize_data_trend(name: str, data: pd.DataFrame) -> None:
     working_dir = os.path.join(VISUAL_DIR, name)
     create_folder_if_not_exists(working_dir)
 
@@ -162,164 +185,6 @@ def visualize_data_trend(name: str, data: pd.DataFrame) -> None:
         plt.clf()
         plt.close()
     return
-
-def drop_zeros(data: pd.DataFrame) -> pd.DataFrame:
-    ## Data zero and NaN value fix
-    ## Remove the row with row being all zeros
-    ## Print out base information for the data
-    ## Drop enitrely empty and unusable data
-    mask = data.iloc[:, 1:].apply(lambda row: all(row.isin([0, np.nan])), axis=1)
-    data = data[~mask]
-    
-    # Fill NaN with 0
-    data = data.fillna(0)
-    
-    # Remove unreasonable information
-    ## f1 remove maxima number
-    data = data[data[('inlet flow')] != 10000]
-    ## f12-f13 round to zeros
-    data.loc[data["line 1 pump speed"] < 0.2, 'line 1 pump speed'] = 0
-    data.loc[data["line 2 pump speed"] < 0.2, 'line 2 pump speed'] = 0
-    ## f16-f18 round to zeros
-    data.loc[data["PAC pump 1 speed"] < 0.2, "PAC pump 1 speed"] = 0
-    data.loc[data["PAC pump 2 speed"] < 0.2, "PAC pump 2 speed"] = 0
-    
-    # Drop record
-    ## Zeros to NaN
-    target_columns = data.columns.tolist()
-    target_columns.remove("timestamp")
-    target_columns.remove("line 1 pump speed")
-    target_columns.remove("line 2 pump speed")
-    target_columns.remove("PAC pump 1 speed")
-    target_columns.remove("PAC pump 2 speed")
-    print(colored(f"Removing empty data from \n{target_columns}", "green"))
-    data[target_columns] = data[target_columns].replace(0, np.nan)
-    data = data.dropna(thresh=0.7*len(target_columns), subset=target_columns)
-    data = data.fillna(0)
-
-    ## See results
-    print("\nAfter dropping:")
-    console_general_data_info(data)
-
-    return data
-
-def fill_zeros(data: pd.DataFrame) -> pd.DataFrame:
-    target_columns = data.columns.tolist()
-    target_columns.remove("timestamp")
-    target_columns.remove("line 1 pump speed")
-    target_columns.remove("line 2 pump speed")
-    target_columns.remove("PAC pump 1 speed")
-    target_columns.remove("PAC pump 2 speed")
-    
-    for column in target_columns:
-        # Find all the zero sequence
-        ## zero_sequence: [(start_index: int, length of the zero sequence: int)]
-        zero_sequences = []
-        cnt = 0
-        start_index = 0
-        isCounting = False
-        for index, row in enumerate(data[column].values):
-            if row == 0:
-                if isCounting:
-                    cnt += 1
-                else:
-                    cnt = 1
-                    start_index = index
-                isCounting = True
-            else:
-                if isCounting:
-                    zero_sequences.append((start_index, cnt))
-                    isCounting = False
-        print(colored(f"{column} has {len(zero_sequences)} zero sequence,", "green"))
-        print(tb.tabulate(zero_sequences, ["Starting index", "Length"]))
-        # Drop zero sequence that is longer than 50
-        for start_index, cnt in zero_sequences:
-            
-            pass
-
-        # Fill in the zero sequence using polyfit
-        for starting_index, length in zero_sequences:
-            important_columns = ["timestamp", column]
-            target_length = 10
-            # Find non-zero sequence before
-            for_length = 0
-            for i in range(target_length):
-                testee = data.iloc[starting_index - i - 1, data.columns.get_loc(column)]
-                if testee != 0:
-                    for_length += 1
-                else:
-                    break
-            for_sequence = data.iloc[starting_index - 1 - for_length: starting_index].copy()
-            for_sequence = for_sequence[important_columns]
-            # Find non-zero sequence after
-            aft_length = 0
-            for i in range(target_length):
-                testee = data.iloc[starting_index + length + i, data.columns.get_loc(column)]
-                if testee != 0:
-                    aft_length += 1
-                else:
-                    break
-            aft_sequence = data.iloc[starting_index + length: starting_index + length + aft_length].copy()
-            aft_sequence = aft_sequence[important_columns]
-            # The unknwon sequence
-            unknown_sequence = data.iloc[starting_index: starting_index + length].copy()
-            unknown_sequence = unknown_sequence.loc[:, important_columns]
-            # Combine the sequence
-            known_sequence = pd.concat([for_sequence, aft_sequence])
-            # Convert the timestamp
-            time_format = "%Y-%m-%d %I:%M:%S"
-            starting_time = pd.to_datetime(known_sequence.iloc[0].copy(deep=True)["timestamp"], format=time_format)
-            known_sequence.loc[:, "timestamp"] = pd.to_datetime(known_sequence["timestamp"], format=time_format)
-            known_sequence.loc[:, "time"] = [int((t - starting_time).total_seconds()) for t in known_sequence["timestamp"]]
-            unknown_sequence.loc[:, "timestamp"] = pd.to_datetime(unknown_sequence["timestamp"], format=time_format)
-            unknown_sequence.loc[:, "time"] = [int((t - starting_time).total_seconds()) for t in unknown_sequence["timestamp"]]
-            # polyfit the sequence
-            parameters = np.polyfit(known_sequence["time"].values, known_sequence[column].values, 1)
-            # Estimate the unknown
-            guess = np.polyval(parameters, unknown_sequence.loc[:, "time"])
-            # print(f"Guess {guess}")
-            # Put the sequence back
-            data.iloc[starting_index:starting_index + length, data.columns.get_loc(column)] = guess
-    
-    return data
-
-def create_more_data(data: pd.DataFrame) -> pd.DataFrame:
-    # Creating more data
-    # Time data
-    data["timestamp"] = pd.to_datetime(data["timestamp"])
-    data["year"] = [pd.to_datetime(d).year for d in data.loc[:, "timestamp"].values.astype(np.datetime64)]
-    data["date"] = [pd.to_datetime(d).date() for d in data.loc[:, "timestamp"].values.astype(np.datetime64)]
-    data["time"] = [pd.to_datetime(d).time() for d in data.loc[:, "timestamp"].values.astype(np.datetime64)]
-    # data = data.drop(columns=["timestamp"])
-    data = data.set_index("timestamp")
-
-    # Convert abs time to rel time
-    ## Year
-    start_year = data.iloc[0, data.columns.get_loc("year")]
-    print(f"The relative year start at {start_year}")
-    data["year"] = data["year"] - start_year
-    ## Date
-    start_date = data.iloc[0, data.columns.get_loc("date")]
-    print(f"The relative date starts at {start_date}")
-    data["date"] = pd.to_datetime(data["date"]) - pd.to_datetime(start_date)
-    data['date'] = data['date'].dt.days.astype(int)
-    data["date_x"] = [math.cos(d / 365 * math.pi) for d in data.loc[:, "date"].values]
-    data["date_y"] = [math.sin(d / 365 * math.pi) for d in data.loc[:, "date"].values]
-    data = data.drop(columns=["date"])
-    ## Time
-    start_time = pd.to_datetime('00:00:00', format= '%H:%M:%S')
-    data['time'] = pd.to_datetime(data['time'], format= '%H:%M:%S') - start_time
-    data['time'] = data['time'].dt.total_seconds().astype(int)
-    data["time_x"] = [math.cos(t / 86400 * math.pi) for t in data.loc[:, "time"].values]
-    data["time_y"] = [math.cos(t / 86400 * math.pi) for t in data.loc[:, "time"].values]
-    data = data.drop(columns=["time"])
-
-    # Rearrange columns
-    cols = data.columns.tolist()
-    cols = cols[15:20] + cols[:15] + cols[20:]
-    data = data[cols]
-
-    return data
 
 def create_pump_data_off_zone(data: pd.DataFrame) -> pd.DataFrame:
     """This function deal with the problem of pump function being very discrete when off
@@ -383,167 +248,7 @@ def one_hot_label(data: pd.DataFrame) -> pd.DataFrame:
     
     return data, skip_columns
 
-def normalization_and_scaling(data: pd.DataFrame, skip_columns: list=[]) -> pd.DataFrame:
-    # Data normalization and scaling
-    print(colored("Normalization and scaling data", "green"))
-    print()
-    target_columns = data.columns.tolist()
-    for i in skip_columns:
-        target_columns.remove(i)
-
-    scaling_factors = []
-    for column in target_columns:
-        # Standardization
-        scaler = StandardScaler()
-        scaled_data = scaler.fit_transform(np.reshape(np.array(data[column]), (-1, 1)))
-        average = scaler.mean_[0]
-        stddev = scaler.scale_[0]
-        # Storing
-        scaling_factors.append([column, average, stddev])
-        data[column] = scaled_data
-    scaling_factors = pd.DataFrame(
-        scaling_factors, 
-        columns = ["name", "average", "stddev"]
-        )
-
-    return data, scaling_factors
-
-def transformation_and_scaling(data: pd.DataFrame, skip_columns: list=[]) -> pd.DataFrame:
-    # Data transformation and scaling
-    print(colored("Transformation and scaling data", "green"))
-    print()
-    target_columns = data.columns.tolist()
-    for i in skip_columns:
-        target_columns.remove(i)
-
-    scaling_factors = {}
-    for column in target_columns:
-        # Normalization
-        transformer = QuantileTransformer(output_distribution='uniform', random_state=42)
-        transformed_data = transformer.fit_transform(np.reshape(np.array(data[column]), (-1, 1)))
-        n_quantiles_ = transformer.n_quantiles_
-        quantiles_ = transformer.quantiles_.tolist()
-        references_ = transformer.references_.tolist()
-        n_features_in_ = transformer.n_features_in_
-        meta = transformer.get_params()
-        # Storing
-        parameters = [
-                n_quantiles_, 
-                quantiles_,
-                references_,
-                n_features_in_,
-                meta,
-                ]
-        scaling_factors[column] = parameters
-        data[column] = transformed_data
-
-    return data, scaling_factors
-
-def save_data_csv(path: str, 
-                  name: str, 
-                  data: pd.DataFrame,
-                  split: bool = True,
-                  **kwarg
-                  ) -> None:
-    """Save data to csv
-
-    Args:
-        path (str): directory for saving csv
-        name (str): file name, not including ".csv"
-        data (pd.DataFrame): data needs to be saved
-        split (bool, optional): Wether do train_test_split. Defaults to True.
-    """
-    print(colored("Saving data", "green"))
-    if not split:
-        # Save
-        save_dir = os.path.join(path, f"{name}.csv")
-        data.to_csv(save_dir)
-    else:
-        # Create folder
-        working_dir = os.path.join(path, name)
-        mkdir_if_not_exist(working_dir)
-        # Split
-        train_data, test_data = train_test_split(data, **kwarg)
-        train_data, val_data = train_test_split(train_data, **kwarg)
-        # Save
-        save_dir_train = os.path.join(working_dir, f"{name}_train.csv")
-        train_data.to_csv(save_dir_train)
-        save_dir_val = os.path.join(working_dir, f"{name}_val.csv")
-        val_data.to_csv(save_dir_val)
-        save_dir_test = os.path.join(working_dir, f"{name}_test.csv")
-        test_data.to_csv(save_dir_test)
-    print()
-    return
-
-def split_data(data: pd.DataFrame) -> list[pd.DataFrame]:
-    """
-    The subprocess split data into multiple dataframe based on the time delta
-    """
-    data.sort_values(by=["timestamp"], inplace=True)
-    # Get the time delta
-    data = data.reset_index(names="timestamp")
-
-    # DEBUG:
-    save_data_csv(DATA_DIR, "debug", data, split=False)
-
-    data["timedelta"] = data["timestamp"].diff()
-    # Convert the time delta column to minutes
-    data['time_delta_minutes'] = data['timedelta'].astype('timedelta64[s]')
-
-    """
-    Typically normal timedelta is 10 minutes
-    However, it is possible to have 9 minutes, 11 minutes
-    I will manually filter those out, as they are not too far from 10 minutes
-    And they create too much segments
-    """
-
-    normal_timedelta = np.timedelta64(10, 'm')
-    min_9_timedelta = np.timedelta64(9, 'm')
-    min_11_timedelta = np.timedelta64(11, 'm')
-    # Filter the DataFrame for time deltas equal to 10 minutes (600s)
-    data = data[
-        (data['time_delta_minutes'] == normal_timedelta)
-        | (data['time_delta_minutes'] == min_9_timedelta)
-        | (data['time_delta_minutes'] == min_11_timedelta)
-        ]
-
-    data = data.drop(columns=["timedelta", "time_delta_minutes"])
-
-    console_general_data_info(data)
-
-    # Split data into multiple section
-    data["timedelta"] = data["timestamp"].diff()
-    ## Find the indices where the time difference is not 10 minutes
-    split_indices = data.index[
-        (data["timedelta"] != pd.Timedelta(minutes=10))
-        & (data["timedelta"] != pd.Timedelta(minutes=9))
-        & (data["timedelta"] != pd.Timedelta(minutes=11))
-        ]
-    ## Split the DataFrame into multiple DataFrames based on the split indices
-    data = data.drop(columns=["timedelta"])
-    dfs = np.split(data, split_indices)
-    # Remove excessive information
-    return dfs
-
-def split_and_save_data(data, name: str) -> None:
-    # Split data
-    cprint("Splitting data.", color="black", on_color="on_cyan", attrs=["blink"])
-    data_segments = split_data(data)
-    
-    # Save split data
-    working_dir = os.path.join(DATA_DIR, name)
-    create_folder_if_not_exists(working_dir)
-    bar = tqdm(total=len(data_segments), desc=colored("Saving data", color="green", attrs=["blink"]))
-    for index, data in enumerate(data_segments):
-        data = data.reset_index(drop=True)
-        data = data.set_index("timestamp")
-        data.to_csv(
-            os.path.join(
-                working_dir, f"seg_{index}.csv"
-            )
-        )
-        bar.update()
-    bar.close()
+# Main
 
 def main() -> None:
     # Load csv
@@ -554,95 +259,366 @@ def main() -> None:
                        date_format="%Y/%m/%d %I:%M %p"
                        )
     console_general_data_info(data)
+    # Set index ad timestamp
+    data = data.set_index("timestamp")
     ## Raw data distribution
-    visual_data_distribution("data_distribution_raw", data.drop(columns=["timestamp"]))
-    
+    _visual_data_distribution("distribution_raw", data)
+    _visualize_data_trend("trend_raw", data)
+
     # Drop zeros
     print(colored("Data property before processing:", "green"))
-    visualize_variance(data, new_remove(data.columns.tolist(), "timestamp"))
+    _visualize_variance(data, data.columns.tolist())
+
+    def drop_zeros(data: pd.DataFrame) -> pd.DataFrame:
+        ## Data zero and NaN value fix
+        ## Remove the row with row being all zeros
+        ## Print out base information for the data
+        ## Drop enitrely empty and unusable data
+        mask = data.iloc[:, 1:].apply(lambda row: all(row.isin([0, np.nan])), axis=1)
+        data = data[~mask]
+
+        # Fill NaN with 0
+        data = data.fillna(0)
+
+        # Remove unreasonable information
+        ## Remove maxima number
+        data = data[data[('inlet flow')] != 10000] # TODO: Do not drop these
+        ## Remove close to zero pump speed
+        for column in Y_COLUMNS:
+            data.loc[data[column] < 0.2, column] = 0 # TODO: Remove 0s in a way that make the data more consistent
+
+        # Drop record
+        print(colored(f"Removing empty data from \n{X_COLUMNS}", "green"))
+        data[X_COLUMNS] = data[X_COLUMNS].replace(0, np.nan)
+        data = data.dropna(thresh=0.7*len(X_COLUMNS), subset=X_COLUMNS)
+        data = data.fillna(0)
+
+        ## See results
+        print("\nAfter dropping:")
+        console_general_data_info(data)
+
+        return data
+    
     data = drop_zeros(data)
     print(colored("Data property after processing:", "green"))
-    visualize_variance(data, new_remove(data.columns.tolist(), "timestamp"))
-    visual_data_distribution("data_distribution_after_dropping", data.drop(columns=["timestamp"]))
-    visualize_data_trend("data_trend_after_dropping", data)
-
-    """
-    Notes on the basic column information
-    For most features, the coeff of variance is really big,
-    The features that have relatively small coeff var can have missing values filled in with average number.
-    Features with very big coeff var should be dropped if there are missing values.
-    Features that is perferablely filled in with average when missing:
-    - inlet phosphorus  
-    - f5
-    - f7
-    - f8
-    - f10
-    - f11
-    Features that is OK to be zero
-    - line 1 pump speed
-    - line 2 pump speed
-    - PAC pump 1 speed
-    - PAC pump 2 speed
-    """
+    _visualize_variance(data, data.columns.tolist())
 
     # Fill zeros
     cprint("Filling zeros.", color="black", on_color="on_cyan", attrs=["blink"])
-    visualize_count_zeros(data)
+    _visualize_count_zeros(data)
+
+    def fill_zeros(data: pd.DataFrame) -> pd.DataFrame:
+        data = data.reset_index(names="timestamp")
+        for column in X_COLUMNS:
+            # Find all the zero sequence
+            ## zero_sequence: [(start_index: int, length of the zero sequence: int)]
+            zero_sequences = []
+            cnt = 0
+            start_index = 0
+            isCounting = False
+            for index, row in enumerate(data[column].values):
+                if row == 0:
+                    if isCounting:
+                        cnt += 1
+                    else:
+                        cnt = 1
+                        start_index = index
+                    isCounting = True
+                else:
+                    if isCounting:
+                        zero_sequences.append((start_index, cnt))
+                        isCounting = False
+            print(colored(f"{column} has {len(zero_sequences)} zero sequence,", "green"))
+            print(tb.tabulate(zero_sequences, ["Starting index", "Length"]))
+            # Drop zero sequence that is longer than 50
+            for start_index, cnt in zero_sequences:
+
+                pass
+            # Put the time stamp back
+            # Fill in the zero sequence using polyfit
+            for starting_index, length in zero_sequences:
+                important_columns = ["timestamp", column]
+                target_length = 10
+                # Find non-zero sequence before
+                for_length = 0
+                for i in range(target_length):
+                    testee = data.iloc[starting_index - i - 1, data.columns.get_loc(column)]
+                    if testee != 0:
+                        for_length += 1
+                    else:
+                        break
+                for_sequence = data.iloc[starting_index - 1 - for_length: starting_index].copy()
+                for_sequence = for_sequence[important_columns]
+                # Find non-zero sequence after
+                aft_length = 0
+                for i in range(target_length):
+                    testee = data.iloc[starting_index + length + i, data.columns.get_loc(column)]
+                    if testee != 0:
+                        aft_length += 1
+                    else:
+                        break
+                aft_sequence = data.iloc[starting_index + length: starting_index + length + aft_length].copy()
+                aft_sequence = aft_sequence[important_columns]
+                # The unknown sequence
+                unknown_sequence = data.iloc[starting_index: starting_index + length].copy()
+                unknown_sequence = unknown_sequence.loc[:, important_columns]
+                # Combine the sequence
+                known_sequence = pd.concat([for_sequence, aft_sequence])
+                # Convert the timestamp
+                time_format = "%Y-%m-%d %I:%M:%S"
+                starting_time = pd.to_datetime(known_sequence.iloc[0].copy(deep=True)["timestamp"], format=time_format)
+                known_sequence.loc[:, "timestamp"] = pd.to_datetime(known_sequence["timestamp"], format=time_format)
+                known_sequence.loc[:, "time"] = [int((t - starting_time).total_seconds()) for t in known_sequence["timestamp"]]
+                unknown_sequence.loc[:, "timestamp"] = pd.to_datetime(unknown_sequence["timestamp"], format=time_format)
+                unknown_sequence.loc[:, "time"] = [int((t - starting_time).total_seconds()) for t in unknown_sequence["timestamp"]]
+                # polyfit the sequence
+                parameters = np.polyfit(known_sequence["time"].values, known_sequence[column].values, 1)
+                # Estimate the unknown
+                guess = np.polyval(parameters, unknown_sequence.loc[:, "time"])
+                # print(f"Guess {guess}")
+                # Put the sequence back
+                data.iloc[starting_index:starting_index + length, data.columns.get_loc(column)] = guess
+        data = data.set_index("timestamp")
+        return data
+    
     data = fill_zeros(data)
     print(colored("Double check if the fill zero process is successful.", "green"))
-    visualize_count_zeros(data)
-    visualize_variance(data, new_remove(data.columns.tolist(), "timestamp"))
-    visualize_data_trend("data_trend_after_filled", data)
+    _visualize_count_zeros(data)
+    _visualize_variance(data, data.columns.tolist())
 
     # Add more data
     cprint("Adding more data.", color="black", on_color="on_cyan", attrs=["blink"])
     console_general_data_info(data)
-    data = create_more_data(data)
-    visualize_correlation(data)
-    console_general_data_info(data)
-    visual_data_distribution("data_distribution_after_creation", data)
-    visualize_data_trend("data_trend_after_creation", data)
+    
+    def create_more_data(data: pd.DataFrame) -> pd.DataFrame:
+        data = data.reset_index(names="timestamp")
+        # Creating more data
+        # Time data
+        data["timestamp"] = pd.to_datetime(data["timestamp"])
+        data["year"] = [pd.to_datetime(d).year for d in data.loc[:, "timestamp"].values.astype(np.datetime64)]
+        data["date"] = [pd.to_datetime(d).date() for d in data.loc[:, "timestamp"].values.astype(np.datetime64)]
+        data["time"] = [pd.to_datetime(d).time() for d in data.loc[:, "timestamp"].values.astype(np.datetime64)]
+        # data = data.drop(columns=["timestamp"])
+        data = data.set_index("timestamp")
 
-    # One-hot label
-    cprint("Creating one-hot label", color="black", on_color="on_cyan", attrs=["blink"])
-    data, skip_columns = one_hot_label(data)
-    _additional_skip_columns = [
-        "year",
-        "time_x",
-        "time_y",
-        "date_x",
-        "date_y",
-    ]
-    skip_columns.extend(_additional_skip_columns)
+        # Convert abs time to rel time
+        ## Year
+        start_year = data.iloc[0, data.columns.get_loc("year")]
+        print(f"The relative year start at {start_year}")
+        data["year"] = data["year"] - start_year
+        ## Date
+        start_date = data.iloc[0, data.columns.get_loc("date")]
+        print(f"The relative date starts at {start_date}")
+        data["date"] = pd.to_datetime(data["date"]) - pd.to_datetime(start_date)
+        data['date'] = data['date'].dt.days.astype(int)
+        data["date_x"] = [math.cos(d / 365 * math.pi) for d in data.loc[:, "date"].values]
+        data["date_y"] = [math.sin(d / 365 * math.pi) for d in data.loc[:, "date"].values]
+        data = data.drop(columns=["date"])
+        ## Time
+        start_time = pd.to_datetime('00:00:00', format= '%H:%M:%S')
+        data['time'] = pd.to_datetime(data['time'], format= '%H:%M:%S') - start_time
+        data['time'] = data['time'].dt.total_seconds().astype(int)
+        data["time_x"] = [math.cos(t / 86400 * math.pi) for t in data.loc[:, "time"].values]
+        data["time_y"] = [math.cos(t / 86400 * math.pi) for t in data.loc[:, "time"].values]
+        data = data.drop(columns=["time"])
+
+        # Rearrange columns
+        cols = data.columns.tolist()
+        cols = cols[15:20] + cols[:15] + cols[20:]
+        data = data[cols]
+        
+        return data
     
-    # Split data
-    split_and_save_data(data, "segmented_data")
-    
-    # Remove 0 from covariance
-    data = create_pump_data_off_zone(data)
+    data = create_more_data(data)
+    _visualize_correlation(data)
+    console_general_data_info(data)
 
     # Normalization and scaling data
     cprint("Normalizing and scaling data.", color="black", on_color="on_cyan", attrs=["blink"])
-    # data, scaling_factors = normalization_and_scaling(data, skip_columns=skip_columns)
-    data, scaling_factors = transformation_and_scaling(data, skip_columns=skip_columns)
+
+    def normalization_and_scaling(data: pd.DataFrame, skip_columns: list=[]) -> pd.DataFrame:
+        # Data normalization and scaling
+        print(colored("Normalization and scaling data", "green"))
+        print()
+        target_columns = data.columns.tolist()
+        for i in skip_columns:
+            target_columns.remove(i)
+
+        scaling_factors = {}
+        for column in target_columns:
+            # Standardization
+            scaler = StandardScaler()
+            scaled_data = scaler.fit_transform(np.reshape(np.array(data[column]), (-1, 1)))
+            average = scaler.mean_[0]
+            stddev = scaler.scale_[0]
+            parameters = scaler.get_params()
+            # Storing
+            meta = [
+                average,
+                stddev,
+                parameters,
+            ]
+            scaling_factors[column] = meta
+            data[column] = scaled_data
+
+        return data, scaling_factors
+
+    def transformation_and_scaling(data: pd.DataFrame, skip_columns: list=[]) -> pd.DataFrame:
+        # Data transformation and scaling
+        print(colored("Transformation and scaling data", "green"))
+        print()
+        target_columns = data.columns.tolist()
+        for i in skip_columns:
+            target_columns.remove(i)
+
+        scaling_factors = {}
+        for column in target_columns:
+            # Normalization
+            transformer = QuantileTransformer(output_distribution='uniform', random_state=42)
+            transformed_data = transformer.fit_transform(np.reshape(np.array(data[column]), (-1, 1)))
+            n_quantiles_ = transformer.n_quantiles_
+            quantiles_ = transformer.quantiles_.tolist()
+            references_ = transformer.references_.tolist()
+            n_features_in_ = transformer.n_features_in_
+            parameters = transformer.get_params()
+            # Storing
+            meta = [
+                    n_quantiles_, 
+                    quantiles_,
+                    references_,
+                    n_features_in_,
+                    parameters,
+                    ]
+            scaling_factors[column] = meta
+            data[column] = transformed_data
+
+        return data, scaling_factors
+
+    data, x_scaling_factors = normalization_and_scaling(data, skip_columns=Y_COLUMNS)
+    data, y_scaling_factors = transformation_and_scaling(data, skip_columns=X_COLUMNS)
     console_general_data_info(data)
-    visualize_variance(data, data.columns.tolist())
-    visual_data_distribution("data_distribution_normed", data)
-    
+    _visualize_variance(data, data.columns.tolist())
+    _visual_data_distribution("distribution_normed", data)
+    _visualize_data_trend("trend_final", data)
 
     # Saving data
     cprint("Saving data.", color="black", on_color="on_cyan", attrs=["blink"])
+    def save_data_csv(path: str, 
+                  name: str, 
+                  data: pd.DataFrame,
+                  split: bool = True,
+                  **kwarg
+                  ) -> None:
+        """Save data to csv
+
+        Args:
+            path (str): directory for saving csv
+            name (str): file name, not including ".csv"
+            data (pd.DataFrame): data needs to be saved
+            split (bool, optional): Wether do train_test_split. Defaults to True.
+        """
+        print(colored("Saving data", "green"))
+        if not split:
+            # Save
+            save_dir = os.path.join(path, f"{name}.csv")
+            data.to_csv(save_dir)
+        else:
+            # Create folder
+            working_dir = os.path.join(path, name)
+            create_folder_if_not_exists(working_dir)
+            # Split
+            train_data, test_data = train_test_split(data, **kwarg)
+            train_data, val_data = train_test_split(train_data, **kwarg)
+            # Save
+            save_dir_train = os.path.join(working_dir, f"{name}_train.csv")
+            train_data.to_csv(save_dir_train)
+            save_dir_val = os.path.join(working_dir, f"{name}_val.csv")
+            val_data.to_csv(save_dir_val)
+            save_dir_test = os.path.join(working_dir, f"{name}_test.csv")
+            test_data.to_csv(save_dir_test)
+        print()
+        return
+
     save_data_csv(DATA_DIR,
                   "processed", 
                   data, 
                   split=False, 
                   **train_test_split_config)
-    scaling_factors_path = os.path.join(DATA_DIR, "scaling_factors.json")
-    with open(scaling_factors_path, "w", encoding="utf-8") as f:
-        json.dump(scaling_factors, f, indent=2)
+    x_scaling_factors_path = os.path.join(DATA_DIR, "x_scaling_factors.json")
+    with open(x_scaling_factors_path, "w", encoding="utf-8") as f:
+        json.dump(x_scaling_factors, f, indent=2)
+    y_scaling_factors_path = os.path.join(DATA_DIR, "y_scaling_factors.json")
+    with open(y_scaling_factors_path, "w", encoding="utf-8") as f:
+        json.dump(y_scaling_factors, f, indent=2)
 
     # Split data
-    split_and_save_data(data, "segmented_data_normed")
+    def split_and_save_data(data, name: str) -> None:
+        # Split data
+        cprint("Splitting data.", color="black", on_color="on_cyan", attrs=["blink"])
+        """
+        The subprocess split data into multiple dataframe based on the time delta
+        """
+        data.sort_values(by=["timestamp"], inplace=True)
+        # Get the time delta
+        data = data.reset_index(names="timestamp")
+        
+        data["timedelta"] = data["timestamp"].diff()
+        # Convert the time delta column to minutes
+        data['time_delta_minutes'] = data['timedelta'].astype('timedelta64[s]')
+    
+        """
+        Typically normal timedelta is 10 minutes
+        However, it is possible to have 9 minutes, 11 minutes
+        I will manually filter those out, as they are not too far from 10 minutes
+        And they create too much segments
+        """
+    
+        normal_timedelta = np.timedelta64(10, 'm')
+        min_9_timedelta = np.timedelta64(9, 'm')
+        min_11_timedelta = np.timedelta64(11, 'm')
+        # Filter the DataFrame for time deltas equal to 10 minutes (600s)
+        data = data[
+            (data['time_delta_minutes'] == normal_timedelta)
+            | (data['time_delta_minutes'] == min_9_timedelta)
+            | (data['time_delta_minutes'] == min_11_timedelta)
+            ]
+    
+        data = data.drop(columns=["timedelta", "time_delta_minutes"])
+    
+        console_general_data_info(data)
+    
+        # Split data into multiple section
+        data["timedelta"] = data["timestamp"].diff()
+        ## Find the indices where the time difference is not 10 minutes
+        split_indices = data.index[
+            (data["timedelta"] != pd.Timedelta(minutes=10))
+            & (data["timedelta"] != pd.Timedelta(minutes=9))
+            & (data["timedelta"] != pd.Timedelta(minutes=11))
+            ]
+        ## Split the DataFrame into multiple DataFrames based on the split indices
+        data = data.drop(columns=["timedelta"])
+        dfs = np.split(data, split_indices)
+
+        # Remove excessive information
+        data_segments = dfs
+
+        # Save split data
+        working_dir = os.path.join(DATA_DIR, name)
+        create_folder_if_not_exists(working_dir)
+        bar = tqdm(total=len(data_segments), desc=colored("Saving data", color="green", attrs=["blink"]))
+        for index, data in enumerate(data_segments):
+            data = data.reset_index(drop=True)
+            data = data.set_index("timestamp")
+            data.to_csv(
+                os.path.join(
+                    working_dir, f"seg_{index}.csv"
+                )
+            )
+            bar.update()
+        bar.close()
+        return
+    
+    split_and_save_data(data, "segmented_data")
     return
 
 if __name__ == "__main__":
