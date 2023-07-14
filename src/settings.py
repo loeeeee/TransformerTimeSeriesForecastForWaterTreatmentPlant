@@ -3,6 +3,7 @@ import os
 
 ROOT_DIR = ""
 DATA_DIR = ""
+RAW_DIR = ""
 CONFIG_DIR = ""
 VISUAL_DIR = ""
 SRC_DIR = ""
@@ -42,6 +43,7 @@ def generate_default_values(DEFAULT_CONFIG_DIR):
         os.path.dirname(os.path.realpath(__file__)) + "/../"
     )  # Root means the repo root
     vars["DATA_DIR"] = os.path.join(vars["ROOT_DIR"], "data/")
+    vars["RAW_DIR"] = os.path.join(vars["ROOT_DIR"], "raw/")
     vars["CONFIG_DIR"] = DEFAULT_CONFIG_DIR
     vars["VISUAL_DIR"] = os.path.join(vars["ROOT_DIR"], "visual/")
     vars["SRC_DIR"] = os.path.join(vars["ROOT_DIR"], "src/")
@@ -70,6 +72,7 @@ def apply_env_from_list(env_var_list):
     print("[INFO] Settings: Apply environment variable.")
     # Create needed dir
     check_and_create_dir(env_var_list["DATA_DIR"])
+    check_and_create_dir(env_var_list["RAW_DIR"])
     check_and_create_dir(env_var_list["CONFIG_DIR"])
     check_and_create_dir(env_var_list["MODEL_DIR"])
     check_and_create_dir(env_var_list["VISUAL_DIR"])
@@ -139,6 +142,7 @@ else:
         vars = main()
         ROOT_DIR    = vars["ROOT_DIR"]
         DATA_DIR    = vars["DATA_DIR"]
+        RAW_DIR    = vars["RAW_DIR"]
         CONFIG_DIR  = vars["CONFIG_DIR"]
         VISUAL_DIR  = vars["VISUAL_DIR"]
         SRC_DIR     = vars["SRC_DIR"]
