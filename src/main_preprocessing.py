@@ -57,6 +57,14 @@ RAW_COLUMNS = [
     "PAC pump 2 speed",
 ]
 
+TIME_COLUMNS = [
+    "year",
+    "date_x",
+    "date_y",
+    "time_x",
+    "time_y",
+]
+
 X_COLUMNS = RAW_COLUMNS[:-4]
 Y_COLUMNS = RAW_COLUMNS[-4:]
 
@@ -281,8 +289,9 @@ def main() -> None:
         data = data.fillna(0)
 
         # Remove unreasonable information
-        ## Remove maxima number
-        data = data[data[('inlet flow')] != 10000] # TODO: Do not drop these
+        ## Remove maxima number, reset it to zero,
+        ## so that it will be process in the following steps
+        data['inlet flow'] = data['inlet flow'].replace(10000, 0)
         ## Remove close to zero pump speed
         for column in Y_COLUMNS:
             data.loc[data[column] < 0.2, column] = 0 # TODO: Remove 0s in a way that make the data more consistent
@@ -493,9 +502,13 @@ def main() -> None:
             data[column] = transformed_data
 
         return data, scaling_factors
-
-    data, x_scaling_factors = normalization_and_scaling(data, skip_columns=Y_COLUMNS)
-    data, y_scaling_factors = transformation_and_scaling(data, skip_columns=X_COLUMNS)
+    
+    _ = Y_COLUMNS.copy()
+    _.extend(TIME_COLUMNS)
+    data, x_scaling_factors = normalization_and_scaling(data, skip_columns=_)
+    _ = X_COLUMNS.copy()
+    _.extend(TIME_COLUMNS)
+    data, y_scaling_factors = transformation_and_scaling(data, skip_columns=_)
     console_general_data_info(data)
     _visualize_variance(data, data.columns.tolist())
     _visual_data_distribution("distribution_normed", data)
