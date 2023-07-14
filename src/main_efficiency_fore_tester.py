@@ -24,7 +24,7 @@ import pandas as pd
 from tqdm import tqdm
 from typing import Tuple
 from termcolor import colored, cprint
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, PowerTransformer, QuantileTransformer
 
 import os
 import re
@@ -80,6 +80,7 @@ def _get_scaled_national_standards(
     Returns:
         dict: scaled national standards with its original name
     """
+    """
     scaled_national_standards = {}
     for name in name_mapping:
         scaler = StandardScaler()
@@ -90,6 +91,22 @@ def _get_scaled_national_standards(
                 og_national_standards[name_mapping[name]]
             ).reshape(1, -1)
             ).reshape(-1)[0]
+    """
+    scaled_national_standards = {}
+    for name in name_mapping:
+        scaler = QuantileTransformer()
+        cprint(f"{scaling_factors}", "green")
+        scaler = scaler.set_params(scaling_factors[name][4])
+        scaler.n_quantiles_ = scaling_factors[name][0]
+        scaler.quantiles_ = np.array(scaling_factors[name][1])
+        scaler.references_ = np.array(scaling_factors[name][2])
+        scaler.n_features_in_ = scaling_factors[name][3]
+
+        scaled_national_standards[name_mapping[name]] = scaler.transform(
+            np.asarray(
+                og_national_standards[name_mapping[name]]
+            ).reshape(1, -1)
+        )
     return scaled_national_standards
 
 # Subprocess
@@ -138,8 +155,8 @@ def efficiency_test_loader(
     if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"]:
         raise NotEnoughData
     
-    src = torch.tensor(src.values, dtype=torch.float32)
-    tgt = torch.tensor(tgt.values, dtype=torch.float32).unsqueeze(1)
+    src = torch.tensor(src.values, dtype=torch.float32, device=DEVICE)
+    tgt = torch.tensor(tgt.values, dtype=torch.float32, device=DEVICE).unsqueeze(1)
     
     dataset = TransformerDataset(
         src,
@@ -149,18 +166,11 @@ def efficiency_test_loader(
         DEVICE,
         )
 
-    if DEVICE == "cuda":
-        isPinMemory = True
-    else:
-        isPinMemory = False
-
     loader = torch.utils.data.DataLoader(
         dataset,
         HYPERPARAMETER["batch_size"],
         drop_last=False,
         collate_fn=transformer_collate_fn,
-        pin_memory = isPinMemory,
-        num_workers = os.cpu_count(),
     )
     return loader
 
@@ -254,6 +264,7 @@ def evaluation(model: TimeSeriesTransformer, dataloaders: DataLoader, working_di
     )
     with torch.no_grad():
         test_loss = 0
+        test_saving = 0
         correct = 0
         bar = tqdm(
             total       = total_batches, 
@@ -269,18 +280,20 @@ def evaluation(model: TimeSeriesTransformer, dataloaders: DataLoader, working_di
                     pred = model(src, tgt)
                     # TODO: Check accuracy calculation
                     temp_loss = loss_fn(pred, tgt_y).item()
-
-                test_loss += temp_loss * tgt_y.shape[1] # Multiply by batch count
+                    temp_saving = torch.sub(tgt_y, pred).sum()
+                test_loss += temp_loss # Multiply by batch count
+                test_saving += temp_saving
 
                 correct += (pred == tgt_y).type(torch.int8).sum().item()
                 plotter.append(tgt_y, pred)
-                bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)
+                bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}, Saving: {temp_saving}", refresh=True)
                 batch_cnt += 1
                 bar.update()
             plotter.signal_new_dataloader()
         bar.colour = BLACK
         bar.close()
-    plotter.signal_finished()
+    note = f"{str(type(loss_fn))[7:-2].split('.')[-1]}: {test_loss}, Saving: {test_saving}"
+    plotter.signal_finished(note=note)
     return
 
 # Main

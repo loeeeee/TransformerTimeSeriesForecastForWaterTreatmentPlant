@@ -688,11 +688,11 @@ class TransformerForecastPlotter:
                 )
         return
     
-    def signal_finished(self) -> None:
+    def signal_finished(self, note: str="") -> None:
         """signal finished should be called after signal epoch when the training finishes
         """
         self.isFinished = True
-        self.signal_new_epoch()
+        self.signal_new_epoch(note=note)
         return
         
     def _plot_truth_vs_guess_init(self,
@@ -977,8 +977,8 @@ class TransformerForecasterVisualLogger:
         self.tlcp.signal_new_dataloader()
         return
     
-    def signal_finished(self) -> None:
-        self.tfp.signal_finished()
+    def signal_finished(self, note: str="") -> None:
+        self.tfp.signal_finished(note=note)
         return
 
     def save_data(self, dir_overwrite: str="") -> None:
@@ -1226,10 +1226,10 @@ class TimeSeriesTransformer(nn.Module):
         args_dir = os.path.join(dir, "args.json")
         kwargs_dir = os.path.join(dir, "kwargs.json")
         with open(args_dir, "w", encoding="utf-8") as f:
-            json.dump(self.args, f)
+            json.dump(self.args, f, indent=2)
 
         with open(kwargs_dir, "w", encoding="utf-8") as f:
-            json.dump(self.kwargs, f)
+            json.dump(self.kwargs, f, indent=2)
         return
     
     def get_metadata(self) -> dict:

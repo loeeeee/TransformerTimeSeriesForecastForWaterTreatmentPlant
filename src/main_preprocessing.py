@@ -3,6 +3,7 @@ import settings # Read the config
 import os
 import sys
 import math
+import json
 
 from tqdm import tqdm
 from datetime import timedelta
@@ -14,7 +15,7 @@ import seaborn as sns
 import tabulate as tb
 import matplotlib.pyplot as plt
 
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, PowerTransformer, QuantileTransformer
 from sklearn.model_selection import train_test_split
 
 from helper import console_general_data_info, create_folder_if_not_exists, new_remove
@@ -392,16 +393,49 @@ def normalization_and_scaling(data: pd.DataFrame, skip_columns: list=[]) -> pd.D
 
     scaling_factors = []
     for column in target_columns:
+        # Standardization
         scaler = StandardScaler()
         scaled_data = scaler.fit_transform(np.reshape(np.array(data[column]), (-1, 1)))
         average = scaler.mean_[0]
         stddev = scaler.scale_[0]
+        # Storing
         scaling_factors.append([column, average, stddev])
         data[column] = scaled_data
     scaling_factors = pd.DataFrame(
         scaling_factors, 
         columns = ["name", "average", "stddev"]
         )
+
+    return data, scaling_factors
+
+def transformation_and_scaling(data: pd.DataFrame, skip_columns: list=[]) -> pd.DataFrame:
+    # Data transformation and scaling
+    print(colored("Transformation and scaling data", "green"))
+    print()
+    target_columns = data.columns.tolist()
+    for i in skip_columns:
+        target_columns.remove(i)
+
+    scaling_factors = {}
+    for column in target_columns:
+        # Normalization
+        transformer = QuantileTransformer(output_distribution='uniform', random_state=42)
+        transformed_data = transformer.fit_transform(np.reshape(np.array(data[column]), (-1, 1)))
+        n_quantiles_ = transformer.n_quantiles_
+        quantiles_ = transformer.quantiles_.tolist()
+        references_ = transformer.references_.tolist()
+        n_features_in_ = transformer.n_features_in_
+        meta = transformer.get_params()
+        # Storing
+        parameters = [
+                n_quantiles_, 
+                quantiles_,
+                references_,
+                n_features_in_,
+                meta,
+                ]
+        scaling_factors[column] = parameters
+        data[column] = transformed_data
 
     return data, scaling_factors
 
@@ -583,17 +617,18 @@ def main() -> None:
     
     # Split data
     split_and_save_data(data, "segmented_data")
-
-    # Normalization and scaling data
-    cprint("Normalizing and scaling data.", color="black", on_color="on_cyan", attrs=["blink"])
-    data, scaling_factors = normalization_and_scaling(data, skip_columns=skip_columns)
-    console_general_data_info(data)
-    console_general_data_info(scaling_factors)
-    visualize_variance(data, data.columns.tolist())
-    visual_data_distribution("data_distribution_normed", data)
     
     # Remove 0 from covariance
     data = create_pump_data_off_zone(data)
+
+    # Normalization and scaling data
+    cprint("Normalizing and scaling data.", color="black", on_color="on_cyan", attrs=["blink"])
+    # data, scaling_factors = normalization_and_scaling(data, skip_columns=skip_columns)
+    data, scaling_factors = transformation_and_scaling(data, skip_columns=skip_columns)
+    console_general_data_info(data)
+    visualize_variance(data, data.columns.tolist())
+    visual_data_distribution("data_distribution_normed", data)
+    
 
     # Saving data
     cprint("Saving data.", color="black", on_color="on_cyan", attrs=["blink"])
@@ -602,9 +637,9 @@ def main() -> None:
                   data, 
                   split=False, 
                   **train_test_split_config)
-    scaling_factors.to_csv(
-        os.path.join(DATA_DIR, "scaling_factors.csv"),
-    )
+    scaling_factors_path = os.path.join(DATA_DIR, "scaling_factors.json")
+    with open(scaling_factors_path, "w", encoding="utf-8") as f:
+        json.dump(scaling_factors, f, indent=2)
 
     # Split data
     split_and_save_data(data, "segmented_data_normed")

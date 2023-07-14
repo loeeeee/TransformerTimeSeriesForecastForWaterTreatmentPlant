@@ -21,6 +21,7 @@ from sklearn.preprocessing import StandardScaler
 
 import os
 import sys
+import json
 import shutil
 import random
 
@@ -133,19 +134,13 @@ def load_scaling_factors() -> dict:
                 column: (scaling factors, stddev)\n
                 column: (scaling factors, stddev)
     """
-    data = pd.read_csv(
-        os.path.join(
-        DATA_DIR, "scaling_factors.csv"
-        ),
-        index_col=0,
-    )
-    result = {}
-    for index, row in data.iterrows():
-        result[row[0]] = (
-            row[1],
-            row[2]
-            )
-    return result
+    scaling_factors_path = os.path.join(
+        DATA_DIR, "scaling_factors.json"
+        )
+    with open(scaling_factors_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    return data
 
 def load_national_standards() -> dict:
     """Load national standard from data/GB
@@ -410,7 +405,7 @@ def main() -> None:
 
                 scheduler_0.step()
                 scheduler_1.step()
-                scheduler_2.step(val_loss)
+                # scheduler_2.step(train_loss)
 
                 if not t_loss.check(val_loss, model):
                     tqdm.write(colored("Validation loss no longer decrease, finish training", "green", "on_red"))
