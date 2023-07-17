@@ -11,7 +11,7 @@ the pump as it is an indication of amount of chemical drug added into the pool.
 import settings # Get config
 import utils # TODO: recode this
 
-from helper import to_numeric_and_downcast_data, get_best_device
+from helper import to_numeric_and_downcast_data
 from transformer import TimeSeriesTransformer, TransformerDataset, transformer_collate_fn, GREEN, BLACK, generate_square_subsequent_mask, TransformerForecastPlotter, NotEnoughData
 
 import torch
@@ -56,7 +56,7 @@ The data needs to be split into train and validation folders *manually*
 MODEL_DIR = sys.argv[1]
 RANGE_DIR = settings.RANGE_DIR
 ROOT_DIR = settings.ROOT_DIR
-DEVICE = get_best_device()
+DEVICE = settings.DEVICE
 
 print(colored(f"Read from {MODEL_DIR}", "black", "on_green"))
 print()
@@ -65,6 +65,59 @@ print()
 HYPERPARAMETER = None # Load from model
 
 # Helper
+def _apply_quantiles_transformer(
+        n_quantiles: int, 
+        quantiles: np.array, 
+        references: np.array, 
+        n_features_in: int, 
+        value: float,
+        ) -> float:
+    """Apply quantiles transform on individual values
+
+    Args:
+        n_quantiles (int): _description_
+        quantiles (np.array): _description_
+        references (np.array): _description_
+        n_features_in (int): _description_
+        value (float): Value to be transformed
+
+    Returns:
+        float: Transform result
+    """
+    # Resume Transformer
+    scaler = QuantileTransformer()
+    scaler.n_quantiles_ = n_quantiles
+    scaler.quantiles_ = quantiles
+    scaler.references_ = references
+    scaler.n_features_in_ = n_features_in
+    # Do the transform
+    scaled_value = scaler.transform(value)
+
+    return scaled_value
+
+def _apply_standard_scaler(
+        mean: float,
+        stddev: float,
+        value: float,
+        ) -> float:
+    """Apply standard scaler on individual values
+
+    Args:
+        mean (float): _description_
+        stddev (float): _description_
+        value (float): Value to be transformed
+
+    Returns:
+        float: Transform result
+    """
+    # Resume transformer
+    scaler = StandardScaler()
+    scaler.mean_ = mean
+    scaler.scale_ = stddev
+    # Do the transform
+    scaled_value = scaler.transform(value)
+    return scaled_value
+
 def _get_scaled_national_standards(
         og_national_standards: dict, 
         scaling_factors: dict,
@@ -80,7 +133,6 @@ def _get_scaled_national_standards(
     Returns:
         dict: scaled national standards with its original name
     """
-    """
     scaled_national_standards = {}
     for name in name_mapping:
         scaler = StandardScaler()
@@ -93,9 +145,9 @@ def _get_scaled_national_standards(
             ).reshape(-1)[0]
     """
     scaled_national_standards = {}
+    cprint(f"{scaling_factors}", "green")
     for name in name_mapping:
         scaler = QuantileTransformer()
-        cprint(f"{scaling_factors}", "green")
         scaler = scaler.set_params(scaling_factors[name][4])
         scaler.n_quantiles_ = scaling_factors[name][0]
         scaler.quantiles_ = np.array(scaling_factors[name][1])
@@ -107,6 +159,7 @@ def _get_scaled_national_standards(
                 og_national_standards[name_mapping[name]]
             ).reshape(1, -1)
         )
+    """
     return scaled_national_standards
 
 # Subprocess
@@ -322,7 +375,7 @@ def main():
     )
     vals = load_data(
         data_dir, 
-        metadata["scaling_factors"], 
+        metadata["x_scaling_factors"], 
         metadata["national_standards"],
         metadata["train_val_split_ratio"],
         )

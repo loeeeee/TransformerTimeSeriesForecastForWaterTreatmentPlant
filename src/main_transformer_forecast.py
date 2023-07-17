@@ -215,6 +215,8 @@ def load(path: str, device: str, train_val_split: float=0.8) -> list:
             train_val.append(csv_to_loader(current_csv, device))
         except NotEnoughData:
             continue
+    
+    # Make more stable training
     random.seed(HYPERPARAMETER["random_seed"])
     random.shuffle(train_val)
     train = train_val[:int(len(csv_files)*train_val_split)]
@@ -299,15 +301,15 @@ def main() -> None:
         "train",
         WORKING_DIR,
         runtime_plotting = True,
-        plot_interval = 20,
+        plot_interval = 10,
         format="svg",
     )
     val_logger = TransformerForecasterVisualLogger(
         "val",
         WORKING_DIR,
         runtime_plotting = True,
-        in_one_figure = True,
-        plot_interval = 5,
+        in_one_figure = False,
+        plot_interval = 3,
         format="svg",
     )
     print(colored("Training:", "black", "on_green"), "\n")

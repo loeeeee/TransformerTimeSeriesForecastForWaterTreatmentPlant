@@ -191,14 +191,8 @@ def one_hot_label(data: pd.DataFrame) -> pd.DataFrame:
     """
     Create one hot label for the data
     """
-    target_columns = [
-        "line 1 pump speed",
-        "line 2 pump speed",
-        "PAC pump 1 speed",
-        "PAC pump 2 speed",
-    ]
     skip_columns = []
-    for i in target_columns:
+    for i in Y_COLUMNS:
         # Temporarily store data
         temp = data[i].copy()
 
@@ -466,7 +460,7 @@ def main() -> None:
     
     _ = Y_COLUMNS.copy()
     _.extend(TIME_COLUMNS)
-    data, x_scaling_factors = normalization_and_scaling(data, skip_columns=_)
+    data, x_scaling_factors = transformation_and_scaling(data, skip_columns=_)
     _ = X_COLUMNS.copy()
     _.extend(TIME_COLUMNS)
     data, y_scaling_factors = transformation_and_scaling(data, skip_columns=_)
@@ -509,8 +503,8 @@ def main() -> None:
             # Convert all occurrences of the smallest value to the floor rounding of the second smallest value
         return data
     
-    data = remove_max_or_min(data, "max", decimal=1)
-    data = remove_max_or_min(data, "min", decimal=1)
+    #data = remove_max_or_min(data, "max", decimal=1)
+    #data = remove_max_or_min(data, "min", decimal=1)
     _visual_data_distribution("distribution_normed", data)
     _visualize_data_trend("trend_final", data)
 
