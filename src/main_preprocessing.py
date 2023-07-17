@@ -6,6 +6,7 @@ import math
 import json
 
 from tqdm import tqdm
+from typing import Literal
 from datetime import timedelta
 from termcolor import colored, cprint
 
@@ -186,38 +187,6 @@ def _visualize_data_trend(name: str, data: pd.DataFrame) -> None:
         plt.close()
     return
 
-def create_pump_data_off_zone(data: pd.DataFrame) -> pd.DataFrame:
-    """This function deal with the problem of pump function being very discrete when off
-
-    Args:
-        data (pd.DataFrame): All the data
-
-    Returns:
-        pd.DataFrame: All the data
-    """
-    cprint("Remove 0 from covariance, making data more smooth", "green")
-    target_columns = [
-        "line 1 pump speed",
-        "line 2 pump speed",
-        "PAC pump 1 speed",
-        "PAC pump 2 speed",
-    ]
-    # Because 0 is far from other values, it is better to make it closer to other values
-    for i in target_columns:
-        # Find the second smallest value in the column
-        second_smallest = np.partition(data[i].unique(), 1)[1] * 1000
-
-        # Find the smallest value in the column
-        smallest = data[i].min()
-
-        # Report
-        cprint(f"Find the smallest value in {i}, it is {smallest}", "green")
-        cprint(f"Find the second smallest value in {i}, it is {second_smallest/1000}", "green")
-
-        # Convert all occurrences of the smallest value to the floor rounding of the second smallest value
-        data.loc[data[i] == smallest, i] = math.floor(second_smallest) / 1000
-    return data
-
 def one_hot_label(data: pd.DataFrame) -> pd.DataFrame:
     """
     Create one hot label for the data
@@ -273,7 +242,7 @@ def main() -> None:
         ## Data zero and NaN value fix
         ## Remove the row with row being all zeros
         ## Print out base information for the data
-        ## Drop enitrely empty and unusable data
+        ## Drop entirely empty and unusable data
         mask = data.iloc[:, 1:].apply(lambda row: all(row.isin([0, np.nan])), axis=1)
         data = data[~mask]
 
@@ -503,6 +472,45 @@ def main() -> None:
     data, y_scaling_factors = transformation_and_scaling(data, skip_columns=_)
     console_general_data_info(data)
     _visualize_variance(data, data.columns.tolist())
+    
+    def remove_max_or_min(data: pd.DataFrame, MaxOrMin: Literal["max", "min"], decimal: int = 2) -> pd.DataFrame:
+        """This function deal with the problem of pump function being very discrete when off
+
+        Args:
+            data (pd.DataFrame): All the data
+
+        Returns:
+            pd.DataFrame: All the data
+        """
+        cprint(f"Remove {MaxOrMin}, making data more smooth", "green")
+
+        decimal = math.pow(10, decimal)
+        # Because 0 is far from other values, it is better to make it closer to other values
+        for i in Y_COLUMNS:
+            if MaxOrMin == "min":
+                # Find the second smallest value in the column
+                second_extreme = np.partition(data[i].unique(), 1)[1] * decimal
+                # Find the extreme value in the column
+                extreme = data[i].min()
+                data.loc[data[i] == extreme, i] = math.floor(second_extreme) / decimal
+            elif MaxOrMin == "max":
+                # Find the second largest value in the column
+                unique_record_cnt = data[i].unique().shape[0]
+                second_extreme = np.partition(data[i].unique(), unique_record_cnt - 2)[unique_record_cnt - 2] * decimal
+                extreme = data[i].max()
+                data.loc[data[i] == extreme, i] = math.ceil(second_extreme) / decimal
+            else:
+                raise Exception
+            
+            # Report
+            cprint(f"Find the {MaxOrMin} value in {i}, it is {extreme}", "green")
+            cprint(f"Find the second {MaxOrMin} value in {i}, it is {second_extreme/decimal}\n", "green")
+
+            # Convert all occurrences of the smallest value to the floor rounding of the second smallest value
+        return data
+    
+    data = remove_max_or_min(data, "max", decimal=1)
+    data = remove_max_or_min(data, "min", decimal=1)
     _visual_data_distribution("distribution_normed", data)
     _visualize_data_trend("trend_final", data)
 
@@ -561,7 +569,7 @@ def main() -> None:
         # Split data
         cprint("Splitting data.", color="black", on_color="on_cyan", attrs=["blink"])
         """
-        The subprocess split data into multiple dataframe based on the time delta
+        The subprocess split data into multiple DataFrame based on the time delta
         """
         data.sort_values(by=["timestamp"], inplace=True)
         # Get the time delta

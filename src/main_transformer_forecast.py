@@ -36,6 +36,7 @@ VISUAL_DIR = settings.VISUAL_DIR
 DATA_DIR = settings.DATA_DIR
 MODEL_DIR = settings.MODEL_DIR
 DEVICE = settings.DEVICE
+RAW_DIR = settings.RAW_DIR
 
 # Create working dir
 WORKING_DIR = os.path.join(MODEL_DIR, MODEL_NAME)
@@ -106,7 +107,7 @@ def load_national_standards() -> dict:
     """
     data = pd.read_csv(
         os.path.join(
-        DATA_DIR, "GB18918-2002.csv"
+        RAW_DIR, "GB18918-2002.csv"
         ),
         index_col=0,
     )
