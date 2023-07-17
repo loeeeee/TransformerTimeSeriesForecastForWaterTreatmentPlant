@@ -74,6 +74,7 @@ class TrackerLoss:
         
         # When it is in early epoch
         if len(self.loss) <= 1:
+            self.loss_delta.append(-self.loss[-1])
             return True
         
         self.loss_delta.append(self.loss[-1] - self.loss[-2])
@@ -101,6 +102,21 @@ class TrackerLoss:
 
     def get_loss_history(self) -> list:
         return self.loss
+    
+    def get_trend(self, scope: int) -> float:
+        """Get the trend of loss
+
+        Args:
+            scope (int): from how long ago it starts measuring the loss trend
+
+        Returns:
+            float: the loss trend represented in a positive or negative float
+        """
+        if len(self.loss_delta) < scope:
+            return sum(self.loss_delta)
+        else:
+            return sum(self.loss_delta[-scope:])
+
 
 def is_ne_in_df(df:pd.DataFrame):
     """

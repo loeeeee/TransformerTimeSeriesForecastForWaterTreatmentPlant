@@ -294,7 +294,7 @@ def main() -> None:
         patience = 2,
     )
     t_epoch = TrackerEpoch(300)
-    t_loss = TrackerLoss(10, model)
+    t_val_loss = TrackerLoss(10, model)
     t_train_loss = TrackerLoss(-1, model)
     # Validation logger
     train_logger = TransformerForecasterVisualLogger(
@@ -317,10 +317,12 @@ def main() -> None:
         while True:
             try:
                 lr = scheduler_0.get_last_lr()[0]
-                tqdm.write("----------------------------------")
+                tqdm.write(colored("--------------------------------------------", "cyan", attrs=["bold"]))
                 tqdm.write(colored(f"Epoch {t_epoch.epoch()}", "green"))
-                tqdm.write(colored(f"Learning rate {lr}", "green"))
-                tqdm.write("----------------------------------")
+                tqdm.write(colored(f"Learning rate {lr:.5f}", "green"))
+                tqdm.write(colored(f"Recent training loss trend: {t_train_loss.get_trend(10):.5f}", "green"))
+                tqdm.write(colored(f"Recent validation loss trend: {t_val_loss.get_trend(10):.5f}", "green"))
+                tqdm.write(colored("--------------------------------------------", "cyan", attrs=["bold"]))
 
                 train_loss = model.learn(
                     train_loaders, 
@@ -345,7 +347,7 @@ def main() -> None:
                 scheduler_1.step()
                 # scheduler_2.step(train_loss)
 
-                if not t_loss.check(val_loss, model):
+                if not t_val_loss.check(val_loss, model):
                     tqdm.write(colored("Validation loss no longer decrease, finish training", "green", "on_red"))
                     break
                 if not t_epoch.check():
@@ -363,8 +365,8 @@ def main() -> None:
     print(colored("Done!", "black", "on_green"), "\n")
     
     # Bring back the best known model
-    model = t_loss.get_best_model()
-    print(colored(f"The best model has the validation loss of {t_loss.lowest_loss}", "cyan"))
+    model = t_val_loss.get_best_model()
+    print(colored(f"The best model has the validation loss of {t_val_loss.lowest_loss}", "cyan"))
     model_best_train = t_train_loss.get_best_model()
     model_best_train.model_name += "_best_trained"
     cprint(f"Best trained model has an train loss of {t_train_loss.lowest_loss}", "cyan")
@@ -375,7 +377,7 @@ def main() -> None:
     # Save model
     save_model(model, WORKING_DIR)
     save_model(model_best_train, WORKING_DIR)
-    visualize_loss(t_loss, WORKING_DIR, f"{MODEL_NAME}_val")
+    visualize_loss(t_val_loss, WORKING_DIR, f"{MODEL_NAME}_val")
     visualize_loss(t_train_loss, WORKING_DIR, f"{MODEL_NAME}_train")
 
     # Save data
