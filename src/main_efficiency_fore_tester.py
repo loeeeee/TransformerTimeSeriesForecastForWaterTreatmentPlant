@@ -22,8 +22,8 @@ import numpy as np
 import pandas as pd
 
 from tqdm import tqdm
-from typing import Tuple
 from termcolor import colored, cprint
+from typing import Literal, Tuple, Union
 from sklearn.preprocessing import StandardScaler, PowerTransformer, QuantileTransformer
 
 import os
@@ -64,6 +64,8 @@ print()
 # HYPERPARAMETER
 HYPERPARAMETER = None # Load from model
 
+SCALED_NATIONAL_STANDARDS = None
+
 # Helper
 def _apply_quantiles_transformer(
         n_quantiles: int, 
@@ -71,6 +73,7 @@ def _apply_quantiles_transformer(
         references: np.array, 
         n_features_in: int, 
         value: float,
+        inverse: Union[bool, np.array] = False,
         ) -> float:
     """Apply quantiles transform on individual values
 
@@ -91,7 +94,10 @@ def _apply_quantiles_transformer(
     scaler.references_ = references
     scaler.n_features_in_ = n_features_in
     # Do the transform
-    scaled_value = scaler.transform(value)
+    if not inverse:
+        scaled_value = scaler.transform(value)
+    else:
+        scaled_value = scaler.inverse_transform(value)
 
     return scaled_value
 
@@ -167,8 +173,7 @@ def _get_scaled_national_standards(
 
 def efficiency_test_loader(
         csv_dir: str,
-        scaling_factors: dict,
-        national_standards: dict,
+        name_mapping: dict,
         ) -> torch.utils.data.DataLoader:
     # Read csv
     data = pd.read_csv(
@@ -178,22 +183,9 @@ def efficiency_test_loader(
         parse_dates=["timestamp"],
     )
     
-    # Scale the national standard
-    name_mapping = {
-        "outlet COD": "COD",
-        "outlet ammonia nitrogen": "ammonia nitrogen",
-        "outlet total nitrogen": "total nitrogen",
-        "outlet phosphorus": "total phosphorus",
-    }
-    scaled_national_standards = _get_scaled_national_standards(
-        national_standards,
-        scaling_factors,
-        name_mapping,
-    )
-    
     # Apply national standards to the data
     for data_name, std_name  in name_mapping.items():
-        data[data_name] = scaled_national_standards[std_name]
+        data[data_name] = SCALED_NATIONAL_STANDARDS[std_name]
 
     # Downcast data
     data = to_numeric_and_downcast_data(data)
@@ -230,8 +222,7 @@ def efficiency_test_loader(
 
 def load_data(
         path: str, 
-        scaling_factors: dict, 
-        national_standards: dict,
+        name_mapping: dict,
         train_validation_ratio: float,
         ) -> list[DataLoader]:
     csv_files = []
@@ -256,8 +247,7 @@ def load_data(
             val.append(
                 efficiency_test_loader(
                     current_csv, 
-                    scaling_factors, 
-                    national_standards,
+                    name_mapping,
                     )
                 )
         except NotEnoughData:
@@ -265,7 +255,7 @@ def load_data(
     
     return val
 
-def load_hyper_parameters(dir: str) -> Tuple[list, dict]:
+def load_model_arguments(dir: str) -> Tuple[list, dict]:
     args_dir = os.path.join(dir, "args.json")
     kwargs_dir = os.path.join(dir, "kwargs.json")
     with open(args_dir, "r", encoding="utf-8") as f:
@@ -301,21 +291,19 @@ def load_model(dir: str, args: list, kwargs: dict) -> Tuple[TimeSeriesTransforme
             best_validated_model.load_state_dict(torch.load(model_dir))
     return best_trained_model, best_validated_model
 
-def evaluation(model: TimeSeriesTransformer, dataloaders: DataLoader, working_dir: str) -> None:
+def evaluation(
+        model: TimeSeriesTransformer, 
+        dataloaders: DataLoader, 
+        plotter: TransformerForecastPlotter,
+        scaler: Union[QuantileTransformer, StandardScaler],
+        ) -> None:
     # Run inference
     total_batches = sum([len(dataloader) for dataloader in dataloaders])
 
     cprint(f"Testing the {model.model_name} model", "green")
     model.eval()
     loss_fn = nn.L1Loss()
-    plotter = TransformerForecastPlotter(
-        f"{model.model_name}_test",
-        working_dir,
-        runtime_plotting = False,
-        which_to_plot = [0, HYPERPARAMETER["forecast_length"]-1],
-        in_one_figure = False,
-        format = "svg",
-    )
+
     with torch.no_grad():
         test_loss = 0
         test_saving = 0
@@ -334,12 +322,20 @@ def evaluation(model: TimeSeriesTransformer, dataloaders: DataLoader, working_di
                     pred = model(src, tgt)
                     # TODO: Check accuracy calculation
                     temp_loss = loss_fn(pred, tgt_y).item()
-                    temp_saving = torch.sub(tgt_y, pred).sum()
+                    _tgt_y = torch.reshape(tgt_y[1, :, 0], (-1,1)).cpu()
+                    _pred = torch.reshape(pred[1, :, 0], (-1,1)).cpu()
+                unscaled_tgt_y = scaler.inverse_transform(_tgt_y)
+                unscaled_pred = scaler.inverse_transform(_pred)
+                temp_saving = np.sum(np.subtract(unscaled_tgt_y, unscaled_pred)) / _tgt_y.size()[0]
+                
                 test_loss += temp_loss # Multiply by batch count
                 test_saving += temp_saving
 
                 correct += (pred == tgt_y).type(torch.int8).sum().item()
-                plotter.append(tgt_y, pred)
+                _unscaled_tgt_y = torch.tensor(unscaled_tgt_y.reshape((1, -1, 1)), device=DEVICE)
+                _unscaled_pred = torch.tensor(unscaled_pred.reshape((1, -1, 1)), device=DEVICE)
+
+                plotter.append(_unscaled_tgt_y, _unscaled_pred)
                 bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}, Saving: {temp_saving}", refresh=True)
                 batch_cnt += 1
                 bar.update()
@@ -359,7 +355,7 @@ def main():
     )
 
     # Load hyper parameters
-    args, kwargs = load_hyper_parameters(working_dir)
+    args, kwargs = load_model_arguments(working_dir)
 
     # Load model
     best_trained_model, best_validated_model = load_model(working_dir, args, kwargs)
@@ -369,6 +365,20 @@ def main():
     global HYPERPARAMETER
     HYPERPARAMETER = metadata
     
+    # Scaled national standards
+    name_mapping = {
+        "outlet COD": "COD",
+        "outlet ammonia nitrogen": "ammonia nitrogen",
+        "outlet total nitrogen": "total nitrogen",
+        "outlet phosphorus": "total phosphorus",
+    }
+    global SCALED_NATIONAL_STANDARDS
+    SCALED_NATIONAL_STANDARDS = _get_scaled_national_standards(
+        metadata["national_standards"],
+        metadata["x_scaling_factors"],
+        name_mapping,
+    )
+
     # Load data
     data_dir = os.path.join(
         working_dir,
@@ -376,16 +386,39 @@ def main():
     )
     vals = load_data(
         data_dir, 
-        metadata["x_scaling_factors"], 
-        metadata["national_standards"],
+        name_mapping,
         metadata["train_val_split_ratio"],
         )
     cprint(f"Number of datasets: {len(vals)}", "green")
 
     # Start evaluation
     cprint("Start evaluation", "green")
-    evaluation(best_validated_model, vals, working_dir)
-    evaluation(best_trained_model, vals, working_dir)
+    scaler_parameters = metadata["y_scaling_factors"][metadata["tgt_y_columns"]]
+    pump_speed_scaler = QuantileTransformer()
+    pump_speed_scaler = pump_speed_scaler.set_params(**scaler_parameters[4])
+    pump_speed_scaler.n_quantiles = scaler_parameters[0]
+    pump_speed_scaler.quantiles_ = np.array(scaler_parameters[1])
+    pump_speed_scaler.references_ = np.array(scaler_parameters[2])
+    pump_speed_scaler.n_features_in_ = scaler_parameters[3]
+
+    plotter = TransformerForecastPlotter(
+        f"best_val_test",
+        working_dir,
+        runtime_plotting = False,
+        which_to_plot = [0],
+        in_one_figure = False,
+        format = "png",
+    )
+    evaluation(best_validated_model, vals, plotter, pump_speed_scaler)
+    plotter = TransformerForecastPlotter(
+        f"best_train_test",
+        working_dir,
+        runtime_plotting = False,
+        which_to_plot = [0],
+        in_one_figure = False,
+        format = "png",
+    )
+    evaluation(best_trained_model, vals, plotter, pump_speed_scaler)
     return
 
 if __name__ == "__main__":

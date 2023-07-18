@@ -784,8 +784,7 @@ class TransformerForecastPlotter:
         fig, ax = plt.subplots()
 
         # Plot the data
-        default_colors = ['#1f77b4', 
-                          '#ff7f0e', 
+        default_colors = ['#ff7f0e', 
                           '#2ca02c', 
                           '#d62728', 
                           '#9467bd', 
@@ -793,7 +792,8 @@ class TransformerForecastPlotter:
                           '#e377c2',
                           '#7f7f7f', 
                           '#bcbd22', 
-                          '#17becf'
+                          '#17becf',
+                          '#1f77b4',
                           ]
         ax.plot(ground_truth, linewidth=1)
         ## Draw the line
