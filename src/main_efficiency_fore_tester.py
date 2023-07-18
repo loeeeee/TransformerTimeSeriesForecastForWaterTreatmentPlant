@@ -306,8 +306,7 @@ def evaluation(
 
     with torch.no_grad():
         test_loss = 0
-        test_saving = 0
-        correct = 0
+        saving = []
         bar = tqdm(
             total       = total_batches, 
             position    = 1,
@@ -315,6 +314,7 @@ def evaluation(
             )
         batch_cnt = 0
         for dataloader in dataloaders:
+            dataloader_saving = []
             for (src, tgt, tgt_y) in dataloader:
                 src, tgt, tgt_y = src.to(DEVICE), tgt.to(DEVICE), tgt_y.to(DEVICE)
                                 
@@ -326,23 +326,39 @@ def evaluation(
                     _pred = torch.reshape(pred[1, :, 0], (-1,1)).cpu()
                 unscaled_tgt_y = scaler.inverse_transform(_tgt_y)
                 unscaled_pred = scaler.inverse_transform(_pred)
-                temp_saving = np.sum(np.subtract(unscaled_tgt_y, unscaled_pred)) / _tgt_y.size()[0]
+                
+                dataloader_saving.append((np.sum(np.subtract(unscaled_pred, unscaled_tgt_y)), _tgt_y.size()[0]))
                 
                 test_loss += temp_loss # Multiply by batch count
-                test_saving += temp_saving
 
-                correct += (pred == tgt_y).type(torch.int8).sum().item()
                 _unscaled_tgt_y = torch.tensor(unscaled_tgt_y.reshape((1, -1, 1)), device=DEVICE)
                 _unscaled_pred = torch.tensor(unscaled_pred.reshape((1, -1, 1)), device=DEVICE)
 
                 plotter.append(_unscaled_tgt_y, _unscaled_pred)
-                bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}, Saving: {temp_saving}", refresh=True)
+                bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}, Saving: {dataloader_saving[-1][0]/dataloader_saving[-1][1]:.4f}", refresh=True)
                 batch_cnt += 1
                 bar.update()
+            
+            # Calculate per dataloader saving
+            saving.append(
+                (
+                sum([i[0] for i in dataloader_saving]),
+                sum([i[1] for i in dataloader_saving])
+                )
+            )
+            tqdm.write(colored(f"Saving {saving[-1][0]/saving[-1][1]:.4f} in one dataloader", "green"))
+            # Clear saving for next epoch
+            dataloader_saving = []
             plotter.signal_new_dataloader()
         bar.colour = BLACK
+        bar.refresh()
         bar.close()
-    note = f"{str(type(loss_fn))[7:-2].split('.')[-1]}: {test_loss}, Saving: {test_saving}"
+    # Calculate the whole saving
+    saving = sum([i[0] for i in saving]) / sum([i[1] for i in saving])
+    cprint(f"---------------------------------", "cyan")
+    cprint(f"Saving {saving:.5f} in total.", "cyan")
+    cprint(f"---------------------------------\n", "cyan")
+    note = f"{str(type(loss_fn))[7:-2].split('.')[-1]}: {test_loss}, Saving: {saving}"
     plotter.signal_finished(note=note)
     return
 

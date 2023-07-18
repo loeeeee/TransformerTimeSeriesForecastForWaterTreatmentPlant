@@ -125,7 +125,7 @@ def generate_src_columns() -> None:
 HYPERPARAMETER = {
     "knowledge_length":     12,     # 4 hours
     "forecast_length":      2,      # 1 hour
-    "embedding_dimension":  512,
+    "embedding_dimension":  1024,
     "batch_size":           128,    # 32 is pretty small
     "train_val_split_ratio":0.7,
     "x_scaling_factors":    load_scaling_factors('x'),
