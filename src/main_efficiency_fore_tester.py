@@ -133,6 +133,7 @@ def _get_scaled_national_standards(
     Returns:
         dict: scaled national standards with its original name
     """
+    """
     scaled_national_standards = {}
     for name in name_mapping:
         scaler = StandardScaler()
@@ -145,10 +146,11 @@ def _get_scaled_national_standards(
             ).reshape(-1)[0]
     """
     scaled_national_standards = {}
-    cprint(f"{scaling_factors}", "green")
+    # cprint(f"{scaling_factors}", "green")
     for name in name_mapping:
         scaler = QuantileTransformer()
-        scaler = scaler.set_params(scaling_factors[name][4])
+        # cprint(f"{}", "green")
+        scaler = scaler.set_params(**scaling_factors[name][4])
         scaler.n_quantiles_ = scaling_factors[name][0]
         scaler.quantiles_ = np.array(scaling_factors[name][1])
         scaler.references_ = np.array(scaling_factors[name][2])
@@ -158,8 +160,7 @@ def _get_scaled_national_standards(
             np.asarray(
                 og_national_standards[name_mapping[name]]
             ).reshape(1, -1)
-        )
-    """
+        ).reshape(-1)[0]
     return scaled_national_standards
 
 # Subprocess

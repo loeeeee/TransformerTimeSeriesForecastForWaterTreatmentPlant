@@ -558,7 +558,7 @@ class TransformerForecastPlotter:
         
         data_file_path = os.path.join(dir, "truth&guess.json")
         with open(data_file_path, "w", buffering=16384, encoding="utf-8") as f:
-            json.dump(unzipped_data, f)
+            json.dump(unzipped_data, f, indent=2)
 
         # Set finish flag
         self.isFinished = True
