@@ -1650,3 +1650,174 @@ def transformer_collate_fn(data):
         result[i] = torch.stack(result[i])
         result[i] = result[i].permute(1, 0, 2)
     return result[0], result[1], result[2]
+        
+class NotEnoughLayerToAverage(Exception):
+    def __init__(self):            
+        # Call the base class constructor with the parameters it needs
+        super().__init__("Not enough layer to average")
+
+class WaterFormer(nn.Module):
+    def __init__(
+            self,
+            input_sequence_size: int,
+            output_sequence_size: int,
+            *args,
+            spatiotemporal_encoding_size: int = 4, 
+            encoder_layer_cnt: int = 8,
+            decoder_layer_cnt: int = 8,
+            encoder_layer_head_cnt: int = 8,
+            decoder_layer_head_cnt: int = 8,
+            average_last_n_decoder_output: int = 4,
+            device: str = "cpu",
+            **kwargs,
+            ) -> None:
+        super().__init__(*args, **kwargs)
+
+        # Always batch first for easy representation
+        isBatchFirst = True
+        # Check input integrity
+        if average_last_n_decoder_output > decoder_layer_cnt:
+            raise NotEnoughLayerToAverage
+        # Take notes of device 
+        self.device = device
+        # Take notes of average layer
+        self.average_last_n_decoder_output = average_last_n_decoder_output
+        
+        # Encoder positional encoding
+        self.encoder_positional_encoding = PositionalEncoding(
+            d_model=input_sequence_size,
+        )
+
+        # Decoder positional encoding
+        self.decoder_positional_encoding = PositionalEncoding(
+            d_model=input_sequence_size,
+        )
+
+        # Encoder layers
+        encoder_layer_example = nn.TransformerEncoderLayer(
+            d_model=input_sequence_size,
+            nhead=encoder_layer_head_cnt,
+            batch_first=isBatchFirst,
+            device=device,
+        )
+        # Actual encoder
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer=encoder_layer_example,
+            num_layers=encoder_layer_cnt,
+            enable_nested_tensor=False,
+        )
+
+        # Decoder layers
+        self.decoder_layers = [
+            nn.TransformerDecoderLayer(
+                d_model=input_sequence_size,
+                nhead=decoder_layer_head_cnt,
+                batch_first=isBatchFirst,
+                device=device,
+            ) for i in range(decoder_layer_cnt)
+        ] 
+
+        # Flatten layer
+        ## It flattens non-batch layer
+        self.flatten_layer = nn.Flatten(
+            start_dim=1,
+            end_dim=-1,
+        )
+
+        # Output dense layer
+        layer_size_after_flatten = spatiotemporal_encoding_size * input_sequence_size
+        self.output_dense_layer = nn.Linear(
+            in_features=layer_size_after_flatten,
+            out_features=output_sequence_size,
+        )
+
+    
+    def forward(self, src: torch.tensor, tgt: torch.tensor) -> torch.tensor:
+        """Informer style forward
+
+        Args:
+            src (torch.tensor): Input of encoder
+            tgt (torch.tensor): Input of decoder
+
+        Returns:
+            torch.tensor: Output of decoder
+        """
+        # Encoder side
+        context = self.encoder_positional_encoding(src)
+        context = self.encoder(context)
+
+        # Decoder side
+        target = self.decoder_positional_encoding(tgt)
+        
+        for decoder_layer in self.decoder_layers[:self.average_last_n_decoder_output]:
+            target = decoder_layer(target, context)
+
+        average_bucket = []
+        for decoder_layer in self.decoder_layers[self.average_last_n_decoder_output:]:
+            target = decoder_layer(target, context)
+            average_bucket.append(target)
+        
+        average = torch.stack(average_bucket, dim=0).mean(dim=0)
+        
+        # Output
+        flatten = self.flatten_layer(average)
+        result = self.output_dense_layer(flatten)
+
+        return result
+
+
+class WaterFormerDataset(torch.utils.data.Dataset):
+    def __init__(self, *args, **kwargs) -> None:
+        """
+        The dataset is inspired by (Long-Range Transformers for Dynamic Spatiotemporal Forecasting)[https://arxiv.org/abs/2109.12218]
+
+        Some blog post also helps the understanding of the dataset. [https://pub.towardsai.net/time-series-regression-using-transformer-models-a-plain-english-introduction-3215892e1cc]
+
+        The dataset formats the data in a way that avoid the limitation of attention layer in a vanilla transformer.
+        The attention layer could only focus on one word minimum in the original Attention Is All You Need paper, which 
+        is fine for NLP, as it a word, typically is the smallest semantic unit in a language. However, in the context of 
+        forecasting continuous values, like pump speed, if we still arrange the values from the same time stamp the 
+        same as how we arrange the embeddings of a single word, the attention layer, by nature, cannot find the 
+        relationship in between the values of the same timestamp, but from different sensors.
+
+        To solve the problem, the dataset will treat every single measured datum as a semantic unit, instead of treating 
+        all the data points in a single measure as one semantic unit. In additional to that, the dataset will also add 
+        helpful metadata like encoded timestamp, positional variables (different from positional encoding in the 
+        transformer), and whether the data is NaN so that it could also help with the robustness of the model.
+
+        The dataset is expected to receive formatted list of input.
+
+        [
+            [timestamp, sensor_1, sensor_2],
+
+            [timestamp, sensor_1, sensor_2],
+        ]
+
+        The output is in the format of following.
+
+        [
+            src, 
+            tgt, 
+            tgt_y
+        ]
+        """
+        super().__init__(*args, **kwargs)
+
+    def __len__(self) -> int:
+        """Get the length of current dataset
+
+        Returns:
+            int: Amount of elements in the dataset
+        """
+        return
+    
+    def __getitem__(self, index: int) -> Tuple[torch.tensor, torch.tensor, torch.tensor]:
+        """Get the *index* item in the dataset, the dataset is using sliding windows
+
+        Args:
+            index (int): The nth datum in the dataset
+
+        Returns:
+            Tuple[torch.tensor, torch.tensor, torch.tensor]: src, tgt, tgt_y in sequence
+        """
+        return
