@@ -1111,16 +1111,6 @@ class TimeSeriesTransformer(nn.Module):
         
         self.model_name = model_name
         self.device = device
-        # Generate masks
-        self.src_mask = generate_square_subsequent_mask(
-            dim1=forecast_length,
-            dim2=knowledge_length
-            ).to(device)
-        
-        self.tgt_mask = generate_square_subsequent_mask(
-            dim1=forecast_length,
-            dim2=forecast_length
-            ).to(device)
 
         # Force the model only have one output feature
         _forecast_feature_size = 1
@@ -1208,8 +1198,6 @@ class TimeSeriesTransformer(nn.Module):
         combined = self.decoder(
             tgt         = tgt,
             memory      = src,
-            tgt_mask    = self.tgt_mask,
-            memory_mask = self.src_mask
         )
 
         # Final linear layer
@@ -1240,6 +1228,7 @@ class TimeSeriesTransformer(nn.Module):
               loss_fn: any,
               optimizer: torch.optim,
               vis_logger: Union[None, TransformerForecasterVisualLogger] = None,
+              profiler: torch.profiler.profile = None
               ) -> float:
         """
         Return the loss of the training
@@ -1292,8 +1281,11 @@ class TimeSeriesTransformer(nn.Module):
                 bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(batch_cnt+1)):.3f}", refresh=True)
                 batch_cnt += 1
                 bar.update()
+
             if vis_logger != None:
                 vis_logger.signal_new_dataloader()
+            if profiler != None:
+                profiler.step()
         bar.colour = BLACK
         bar.close()
 

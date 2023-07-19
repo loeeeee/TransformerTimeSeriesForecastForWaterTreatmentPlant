@@ -123,18 +123,18 @@ def generate_src_columns() -> None:
 
 # HYPERPARAMETER
 HYPERPARAMETER = {
-    "knowledge_length":     12,     # 4 hours
-    "forecast_length":      2,      # 1 hour
-    "embedding_dimension":  1024,
-    "batch_size":           128,    # 32 is pretty small
-    "train_val_split_ratio":0.7,
-    "x_scaling_factors":    load_scaling_factors('x'),
-    "y_scaling_factors":    load_scaling_factors('y'),
-    "national_standards":   load_national_standards(),
-    "src_columns":          generate_src_columns(),
-    "tgt_columns":          TGT_COLUMNS,
-    "tgt_y_columns":        TGT_COLUMNS,
-    "random_seed":          42,
+    "knowledge_length":             32,     # 4 hours
+    "forecast_length":              2,      # 1 hour
+    "embedding_dimension":          1024,
+    "batch_size":                   64,    # 32 is pretty small
+    "train_val_split_ratio":        0.5,
+    "x_scaling_factors":            load_scaling_factors('x'),
+    "y_scaling_factors":            load_scaling_factors('y'),
+    "national_standards":           load_national_standards(),
+    "src_columns":                  generate_src_columns(),
+    "tgt_columns":                  TGT_COLUMNS,
+    "tgt_y_columns":                TGT_COLUMNS,
+    "random_seed":                  42,
 }
 
 INPUT_FEATURE_SIZE = len(HYPERPARAMETER["src_columns"])
@@ -289,11 +289,14 @@ def main() -> None:
         optimizer = optimizer,
         T_0 = 5,
     )
-    scheduler_2 = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    scheduler = torch.optim.lr_scheduler.ChainedScheduler([scheduler_0, scheduler_1])
+    """
+    scheduler_2 = torch.optim.lr_scheduler.ExponentialLR(
         optimizer = optimizer,
-        patience = 2,
+        gamma = 0.1,
     )
-    t_epoch = TrackerEpoch(300)
+    """
+    t_epoch = TrackerEpoch(50)
     t_val_loss = TrackerLoss(10, model)
     t_train_loss = TrackerLoss(-1, model)
     # Validation logger
@@ -313,15 +316,29 @@ def main() -> None:
         format="svg",
     )
     print(colored("Training:", "black", "on_green"), "\n")
+    
+    # Performance profiler
+    """
+    profiler =  torch.profiler.profile(
+        schedule=torch.profiler.schedule(wait=1, warmup=1, active=1, repeat=1),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(f'{WORKING_DIR}/profiling'),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True
+    )
+    profiler.start()
+    """
     with tqdm(total=t_epoch.max_epoch, unit="epoch", position=0) as bar:
         while True:
             try:
-                lr = scheduler_0.get_last_lr()[0]
+                lr = scheduler.get_last_lr()[0]
                 tqdm.write(colored("--------------------------------------------", "cyan", attrs=["bold"]))
                 tqdm.write(colored(f"Epoch {t_epoch.epoch()}", "green"))
                 tqdm.write(colored(f"Learning rate {lr:.5f}", "green"))
-                tqdm.write(colored(f"Recent training loss trend: {t_train_loss.get_trend(10):.5f}", "green"))
-                tqdm.write(colored(f"Recent validation loss trend: {t_val_loss.get_trend(10):.5f}", "green"))
+                tqdm.write(colored(f"Recent training loss trend: {t_train_loss.get_trend(3):.5f}", "green"))
+                tqdm.write(colored(f"Recent validation loss trend: {t_val_loss.get_trend(3):.5f}", "green"))
+                tqdm.write(colored(f"Best training loss: {t_train_loss.lowest_loss:.5f}", "green"))
+                tqdm.write(colored(f"Best validation loss: {t_val_loss.lowest_loss:.5f}", "green"))
                 tqdm.write(colored("--------------------------------------------", "cyan", attrs=["bold"]))
 
                 train_loss = model.learn(
@@ -329,6 +346,7 @@ def main() -> None:
                     loss_fn, 
                     optimizer, 
                     vis_logger = train_logger,
+                    #profiler=profiler,
                 )
                 note = f"{str(type(loss_fn))[7:-2].split('.')[-1]}: {train_loss}"
                 train_logger.signal_new_epoch(note=note)
@@ -343,9 +361,9 @@ def main() -> None:
                 note = f"{str(type(loss_fn))[7:-2].split('.')[-1]}: {val_loss}"
                 val_logger.signal_new_epoch(note=note)
 
-                scheduler_0.step()
-                scheduler_1.step()
-                # scheduler_2.step(train_loss)
+                #scheduler_0.step()
+                scheduler.step()
+                #scheduler_2.step()
 
                 if not t_val_loss.check(val_loss, model):
                     tqdm.write(colored("Validation loss no longer decrease, finish training", "green", "on_red"))
@@ -361,6 +379,7 @@ def main() -> None:
                 tqdm.write(colored("Early stop triggered by Keyboard Input", "green", "on_red"))
                 break
         bar.close()
+    #profiler.stop()
 
     print(colored("Done!", "black", "on_green"), "\n")
     
