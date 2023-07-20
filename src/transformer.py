@@ -1662,7 +1662,7 @@ class WaterFormer(nn.Module):
             input_sequence_size: int,
             output_sequence_size: int,
             *args,
-            spatiotemporal_encoding_size: int = 4, 
+            spatiotemporal_encoding_size: int = 4,
             encoder_layer_cnt: int = 8,
             decoder_layer_cnt: int = 8,
             encoder_layer_head_cnt: int = 8,
@@ -1675,6 +1675,27 @@ class WaterFormer(nn.Module):
 
         # Always batch first for easy representation
         isBatchFirst = True
+        # Spatiotemporal encoding is not always the same
+        """
+        [<batch>
+            [<input_sequence>
+                [<spatiotemporal_encoding>
+                    sensor reading: float,
+                    positional variable: int,
+                    isValid: bool,
+                    temporal encoding: float, (This can be more than one)
+                ],
+                [<spatiotemporal_encoding>
+                    ...
+                ],
+                ...
+            ],
+            [<input_sequence>
+                ...
+            ],
+            ...
+        ]
+        """
         # Check input integrity
         if average_last_n_decoder_output > decoder_layer_cnt:
             raise NotEnoughLayerToAverage
@@ -1788,7 +1809,16 @@ class WaterFormer(nn.Module):
 
 
 class WaterFormerDataset(torch.utils.data.Dataset):
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(
+            self, 
+            src: np.array,
+            tgt: np.array,
+            timestamp: Union[list, np.array],
+            input_sequence_size: int,
+            output_sequence_size: int,
+            *args, 
+            **kwargs
+            ) -> None:
         """
         The dataset is inspired by (Long-Range Transformers for Dynamic Spatiotemporal Forecasting)[https://arxiv.org/abs/2109.12218]
 
@@ -1809,9 +1839,9 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         The dataset is expected to receive formatted list of input.
 
         [
-            [timestamp, sensor_1, sensor_2],
+            [sensor_1, sensor_2],
 
-            [timestamp, sensor_1, sensor_2],
+            [sensor_1, sensor_2],
         ]
 
         The output is in the format of following.
@@ -1823,6 +1853,24 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         ]
         """
         super().__init__(*args, **kwargs)
+        self.src = src
+        self.tgt = tgt
+        self.timestamp = timestamp
+        self.input_sequence_size = input_sequence_size
+        self.output_sequence_size = output_sequence_size
+        
+        self._length = (self.src.shape[0] * self.src.shape[1]) - self.input_sequence_size - self.output_sequence_size - 1 # BUG
+        if self._length <= 0:
+            raise NotEnoughData
+        
+        # Starting formatting data
+        cprint("Convert timestamp", "green")
+        self.timestamp = self._convert_timestamp(timestamp)
+        cprint("Combine timestamp with source", "green")
+        self.src = self._forge_timestamp_with_data(self.src, self.timestamp)
+        cprint("Combine timestamp with target", "green")
+        self.tgt = self._forge_timestamp_with_data(self.tgt, self.timestamp)
+        cprint("Finish initialize", "green")
 
     def __len__(self) -> int:
         """Get the length of current dataset
@@ -1830,7 +1878,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         Returns:
             int: Amount of elements in the dataset
         """
-        return
+        return self._length
     
     def __getitem__(self, index: int) -> Tuple[torch.tensor, torch.tensor, torch.tensor]:
         """Get the *index* item in the dataset, the dataset is using sliding windows
@@ -1842,3 +1890,163 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             Tuple[torch.tensor, torch.tensor, torch.tensor]: src, tgt, tgt_y in sequence
         """
         return
+    
+    def _convert_timestamp(self, timestamp: Union[list, np.array]):
+        """Convert absolute timestamp to sinusoid timestamp
+
+        The default behaviors are convert the input timestamp to sinusoid, cos representation with 
+        hour, day, week, month,and year as period.
+
+        Args:
+            timestamp (Union[list, np.array]): The list of timestamp will be convert to np.array
+
+        Returns:
+            np.array: The sinusoid representation of the timestamp. The default shape would be 
+                        (timestamp.shape[0], 10)
+        """
+        # Convert to desired input
+        if isinstance(timestamp, list):
+            timestamp: np.array = np.array(timestamp, type=np.timedelta64)
+        
+        timestamp = (timestamp - timestamp.astype('datetime64[m]')) / np.timedelta64(1, 'm')
+        
+        # Hour
+        hour_length = 60
+        sin_hours = np.sin(2 * np.pi * timestamp / hour_length)
+        cos_hours = np.cos(2 * np.pi * timestamp / hour_length)
+
+        # Day
+        day_length = 60 * 24
+        sin_days = np.sin(2 * np.pi * timestamp / day_length)
+        cos_days = np.cos(2 * np.pi * timestamp / day_length)
+
+        # Week
+        week_length = 60 * 24 * 7
+        sin_weeks = np.sin(2 * np.pi * timestamp / week_length)
+        cos_weeks = np.cos(2 * np.pi * timestamp / week_length)
+
+        # Month
+        sin_months = timestamp.copy()
+        cos_months = timestamp.copy()
+        # Extract the month information using NumPy functions
+        months = timestamp.astype('datetime64[M]').astype(int) % 12 + 1
+        # Get an array of boolean values where True represents months with 31 days
+        big_month_length = 60 * 24 * 31
+        is_31_days_month = np.isin(months, [1, 3, 5, 7, 8, 10, 12])
+        sin_months[is_31_days_month] = np.sin(2 * np.pi * timestamp[is_31_days_month] / big_month_length)
+        cos_months[is_31_days_month] = np.cos(2 * np.pi * timestamp[is_31_days_month] / big_month_length)
+        # Get an array of boolean values where True represents months with 30 days
+        small_month_length = 60 * 24 * 30
+        is_30_days_month = np.isin(months, [4, 6, 9, 11])
+        sin_months[is_30_days_month] = np.sin(2 * np.pi * timestamp[is_30_days_month] / small_month_length)
+        cos_months[is_30_days_month] = np.cos(2 * np.pi * timestamp[is_30_days_month] / small_month_length)
+        # Get an array of boolean values where True represents months being Feb
+        tiny_month_length = 60 * 24 * 28
+        is_feb = np.isin(months, [2])
+        sin_months[is_feb] = np.sin(2 * np.pi * timestamp[is_feb] / tiny_month_length)
+        cos_months[is_feb] = np.cos(2 * np.pi * timestamp[is_feb] / tiny_month_length)
+
+        # Year
+        year_length = 60 * 24 * 365
+        sin_years = np.sin(2 * np.pi * timestamp / year_length)
+        cos_years = np.cos(2 * np.pi * timestamp / year_length)
+
+        sinusoid_timestamp = np.stack(
+            [sin_hours, cos_hours, sin_days, cos_days, sin_weeks, cos_weeks, sin_months, cos_months, sin_years, cos_years], 
+            axis=0,
+        )
+
+        # Transpose the new array for easy usage
+        ## Change from
+        """
+        [
+            [sin_hour, sin_hour, ...],
+            [cos_hour, cos_hour, ...],
+            [sin_day, sin_day, ...],
+            ...
+        ]
+        """
+        ## Change to
+        """
+        [
+            [sin_hour, cos_hour, sin_day, cos_day, ...],
+            [sin_hour, cos_hour, sin_day, cos_day, ...],
+            [sin_hour, cos_hour, sin_day, cos_day, ...],
+            ...
+        ]
+        """
+    
+        sinusoid_timestamp = sinusoid_timestamp.T
+
+        return sinusoid_timestamp
+    
+    def _forge_timestamp_with_data(self, data: np.array, timestamp: np.array) -> np.array:
+        record_cnt: int = data.shape[0]
+        feature_cnt: int = data.shape[1]
+        # Reshape data
+        """
+        [
+            var_0, var_1, var_2, ..., var_n, var_0, ...
+        ]
+        """
+        data: np.array = data.reshape((-1))
+
+        # Create isValid array
+        ## The rational for this is that the model will know the value should not be used.
+        nan_filter = np.isnan(data)
+        isValid = np.ones(shape=(data.shape[0]))
+        isValid[nan_filter] = 0
+
+        # Create positional variables
+        """
+        [
+            sin_0, sin_1, sin_2, ..., sin_n, sin_0, ...
+        ]
+        """
+        sin_positional_variable = np.sin(2 * np.pi * np.arange(feature_cnt) / feature_cnt)
+        cos_positional_variable = np.cos(2 * np.pi * np.arange(feature_cnt) / feature_cnt)
+        sin_positional_variable = np.tile(sin_positional_variable, record_cnt)
+        cos_positional_variable = np.tile(cos_positional_variable, record_cnt)
+
+        # Duplicate timestamp
+        """
+        [
+            [0],
+            [0],
+            ...,
+            [0],
+            [1],
+            ...,
+            ...
+        ]
+        """
+        timestamp = np.repeat(timestamp, feature_cnt, axis=0)
+
+        # Join
+        """
+        [
+            [<data>],
+            [<sin>],
+            [<cos>]
+        ]
+        """
+        data = data.stack([data, isValid, sin_positional_variable, cos_positional_variable], axis=0)
+        """
+        [
+            [data, sin_positional_variable, cos_positional_variable],
+            [data, sin_positional_variable, cos_positional_variable],
+            [data, sin_positional_variable, cos_positional_variable],
+            ...
+        ]
+        """
+        data = data.T
+        """
+        [
+            [data, sin_positional_variable, cos_positional_variable, sin_hour, cos_hour, sin_day, cos_day, ...],
+            [data, sin_positional_variable, cos_positional_variable, sin_hour, cos_hour, sin_day, cos_day, ...],
+            [data, sin_positional_variable, cos_positional_variable, sin_hour, cos_hour, sin_day, cos_day, ...],
+            ...
+        ]
+        """
+        data = np.concatenate([data, timestamp], axis=1, dtype=np.float32)
+        return data
