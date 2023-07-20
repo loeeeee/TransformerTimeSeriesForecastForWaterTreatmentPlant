@@ -1807,6 +1807,70 @@ class WaterFormer(nn.Module):
 
         return result
 
+    def learn(
+            self,
+            dataloaders: list[torch.utils.data.DataLoader],
+            loss_fn: torch.nn.MSELoss,
+            optimizer: torch.optim.SGD,
+            visual_logger: Union[None, TransformerForecasterVisualLogger] = None,
+            profiler: Union[None, torch.profiler.profile] = None,
+            ) -> None:
+
+        # Model enters training mode
+        self.train()
+
+        # Metadata
+        total_batch = sum([len(dataloader) for dataloader in dataloaders])
+        bar = tqdm(
+            total       = total_batch, 
+            position    = 1,
+            colour      = GREEN,
+            )
+        total_loss = 0
+        
+        # Iterate through dataloaders
+        batch_cnt = 0
+        for dataloader in dataloaders:
+            for (src, tgt, tgt_y) in dataloader:
+                # zero the parameter gradients
+                self.zero_grad(set_to_none=True)
+
+                # Forward
+                with torch.autocast(device_type=self.device):
+                    # Make forecasts
+                    prediction = self(src, tgt)
+                    # Compute and backprop loss
+                    loss = loss_fn(prediction, tgt_y)
+
+                # Backward
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+
+                # Take optimizer step
+                optimizer.step()
+
+                # CPU
+                dataloader_loss = loss.item()
+                total_loss += dataloader_loss
+                
+                # Add data to val_logger
+                if visual_logger != None:
+                    visual_logger.append_to_forecast_plotter(tgt_y, prediction)
+                    visual_logger.append_to_loss_console_plotter(dataloader_loss)
+
+                bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(batch_cnt+1)):.3f}", refresh=True)
+                batch_cnt += 1
+                bar.update()
+
+            if visual_logger != None:
+                visual_logger.signal_new_dataloader()
+            if profiler != None:
+                profiler.step()
+        bar.colour = BLACK
+        bar.close()
+
+        return total_loss / total_batch
+
 
 class WaterFormerDataset(torch.utils.data.Dataset):
     def __init__(
@@ -1853,13 +1917,11 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         ]
         """
         super().__init__(*args, **kwargs)
-        self.src = src
-        self.tgt = tgt
-        self.timestamp = timestamp
+        self.tgt_y = tgt.copy()
         self.input_sequence_size = input_sequence_size
         self.output_sequence_size = output_sequence_size
         
-        self._length = (self.src.shape[0] * self.src.shape[1]) - self.input_sequence_size - self.output_sequence_size - 1 # BUG
+        self._length = (src.shape[0] * src.shape[1]) - input_sequence_size - output_sequence_size
         if self._length <= 0:
             raise NotEnoughData
         
@@ -1867,9 +1929,9 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         cprint("Convert timestamp", "green")
         self.timestamp = self._convert_timestamp(timestamp)
         cprint("Combine timestamp with source", "green")
-        self.src = self._forge_timestamp_with_data(self.src, self.timestamp)
+        self.src = self._forge_timestamp_with_data(src, self.timestamp)
         cprint("Combine timestamp with target", "green")
-        self.tgt = self._forge_timestamp_with_data(self.tgt, self.timestamp)
+        self.tgt = self._forge_timestamp_with_data(tgt, self.timestamp)
         cprint("Finish initialize", "green")
 
     def __len__(self) -> int:
@@ -1889,7 +1951,10 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         Returns:
             Tuple[torch.tensor, torch.tensor, torch.tensor]: src, tgt, tgt_y in sequence
         """
-        return
+        src = self.src[index: index + self.input_sequence_size]
+        tgt = self.tgt[index: index + self.input_sequence_size]
+        tgt_y = self.tgt_y[index + self.input_sequence_size: index + self.input_sequence_size + self.output_sequence_size]
+        return src, tgt, tgt_y
     
     def _convert_timestamp(self, timestamp: Union[list, np.array]):
         """Convert absolute timestamp to sinusoid timestamp

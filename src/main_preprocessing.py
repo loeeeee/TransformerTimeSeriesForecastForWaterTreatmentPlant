@@ -630,3 +630,95 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+def remain():
+    # Load csv
+    cprint("Loading csv.", color="black", on_color="on_cyan", attrs=["blink"])
+    data = pd.read_csv(INPUT_DATA, 
+                       index_col=0, 
+                       parse_dates=[1],
+                       date_format="%Y/%m/%d %I:%M %p"
+                       )
+    console_general_data_info(data)
+    # Set index ad timestamp
+    data = data.set_index("timestamp")
+    ## Raw data distribution
+    _visual_data_distribution("distribution_raw", data)
+    _visualize_data_trend("trend_raw", data)
+
+    # Drop zeros
+    print(colored("Data property before processing:", "green"))
+    _visualize_variance(data, data.columns.tolist())
+
+    def mark_unreasonable_data(data: pd.DataFrame) -> pd.DataFrame:
+        return
+    
+    # Split data
+    def split_and_save_data(data, name: str) -> None:
+        # Split data
+        cprint("Splitting data.", color="black", on_color="on_cyan", attrs=["blink"])
+        """
+        The subprocess split data into multiple DataFrame based on the time delta
+        """
+        data.sort_values(by=["timestamp"], inplace=True)
+        # Get the time delta
+        data = data.reset_index(names="timestamp")
+        
+        data["timedelta"] = data["timestamp"].diff()
+        # Convert the time delta column to minutes
+        data['time_delta_minutes'] = data['timedelta'].astype('timedelta64[s]')
+    
+        """
+        Typically normal timedelta is 10 minutes
+        However, it is possible to have 9 minutes, 11 minutes
+        I will manually filter those out, as they are not too far from 10 minutes
+        And they create too much segments
+        """
+    
+        normal_timedelta = np.timedelta64(10, 'm')
+        min_9_timedelta = np.timedelta64(9, 'm')
+        min_11_timedelta = np.timedelta64(11, 'm')
+        # Filter the DataFrame for time deltas equal to 10 minutes (600s)
+        data = data[
+            (data['time_delta_minutes'] == normal_timedelta)
+            | (data['time_delta_minutes'] == min_9_timedelta)
+            | (data['time_delta_minutes'] == min_11_timedelta)
+            ]
+    
+        data = data.drop(columns=["timedelta", "time_delta_minutes"])
+    
+        console_general_data_info(data)
+    
+        # Split data into multiple section
+        data["timedelta"] = data["timestamp"].diff()
+        ## Find the indices where the time difference is not 10 minutes
+        split_indices = data.index[
+            (data["timedelta"] != pd.Timedelta(minutes=10))
+            & (data["timedelta"] != pd.Timedelta(minutes=9))
+            & (data["timedelta"] != pd.Timedelta(minutes=11))
+            ]
+        ## Split the DataFrame into multiple DataFrames based on the split indices
+        data = data.drop(columns=["timedelta"])
+        dfs = np.split(data, split_indices)
+
+        # Remove excessive information
+        data_segments = dfs
+
+        # Save split data
+        working_dir = os.path.join(DATA_DIR, name)
+        create_folder_if_not_exists(working_dir)
+        bar = tqdm(total=len(data_segments), desc=colored("Saving data", color="green", attrs=["blink"]))
+        for index, data in enumerate(data_segments):
+            data = data.reset_index(drop=True)
+            data = data.set_index("timestamp")
+            data.to_csv(
+                os.path.join(
+                    working_dir, f"seg_{index}.csv"
+                )
+            )
+            bar.update()
+        bar.close()
+        return
+    
+    split_and_save_data(data, "segmented_data")
+    return
