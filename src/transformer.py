@@ -1734,6 +1734,8 @@ class WaterFormer(nn.Module):
     
     def forward(self, src: torch.tensor, tgt: torch.tensor) -> torch.tensor:
         """Informer style forward
+        
+        This model will always use batch first tensor format.
 
         Args:
             src (torch.tensor): Input of encoder
@@ -1743,12 +1745,20 @@ class WaterFormer(nn.Module):
             torch.tensor: Output of decoder
         """
         # Encoder side
+        ## Passing though the positional encoding, tensor shape would not change
+        ## [batch_size, spatiotemporal_encoding_size, input_sequence_size]
         context = self.encoder_positional_encoding(src)
+        ## Passing though the encoder, tensor shape would not change
+        ## [batch_size, spatiotemporal_encoding_size, input_sequence_size]
         context = self.encoder(context)
 
         # Decoder side
+        ## Passing though the positional encoding, tensor shape would not change
+        ## [batch_size, spatiotemporal_encoding_size, output_sequence_size]
         target = self.decoder_positional_encoding(tgt)
-        
+
+        ## Passing though the decoder, tensor shape would not change
+        ## [batch_size, spatiotemporal_encoding_size, output_sequence_size]
         for decoder_layer in self.decoder_layers[:self.average_last_n_decoder_output]:
             target = decoder_layer(target, context)
 
@@ -1757,10 +1767,21 @@ class WaterFormer(nn.Module):
             target = decoder_layer(target, context)
             average_bucket.append(target)
         
+        ## Passing though the average layer
+        ## stacking result: [average_last_n_decoder_output, batch_size, spatiotemporal_encoding_size, output_sequence_size]
+        ## average result: [batch_size, spatiotemporal_encoding_size, output_sequence_size]
         average = torch.stack(average_bucket, dim=0).mean(dim=0)
         
         # Output
+        ## Passing though flatten layer
+        ## Change from
+        ## [batch_size, spatiotemporal_encoding_size, output_sequence_size]
+        ## To 
+        ## [batch_size, spatiotemporal_encoding_size * output_sequence_size]
         flatten = self.flatten_layer(average)
+        ## Passing though dense layer
+        ## Shape is changed to
+        ## [batch_size, output_sequence_size]
         result = self.output_dense_layer(flatten)
 
         return result
