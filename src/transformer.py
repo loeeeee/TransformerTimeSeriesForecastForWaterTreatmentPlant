@@ -1656,13 +1656,18 @@ class NotEnoughLayerToAverage(Exception):
         # Call the base class constructor with the parameters it needs
         super().__init__("Not enough layer to average")
 
+class SequenceLengthDoesNotMatch(Exception):
+    def __init__(self):            
+        # Call the base class constructor with the parameters it needs
+        super().__init__("Sequence length does not match")
+
 class WaterFormer(nn.Module):
     def __init__(
             self,
             input_sequence_size: int,
             output_sequence_size: int,
+            spatiotemporal_encoding_size: int,
             *args,
-            spatiotemporal_encoding_size: int = 4,
             encoder_layer_cnt: int = 8,
             decoder_layer_cnt: int = 8,
             encoder_layer_head_cnt: int = 8,
@@ -1809,7 +1814,7 @@ class WaterFormer(nn.Module):
 
     def learn(
             self,
-            dataloaders: list[torch.utils.data.DataLoader],
+            dataloader: torch.utils.data.DataLoader,
             loss_fn: torch.nn.MSELoss,
             optimizer: torch.optim.SGD,
             visual_logger: Union[None, TransformerForecasterVisualLogger] = None,
@@ -1820,7 +1825,7 @@ class WaterFormer(nn.Module):
         self.train()
 
         # Metadata
-        total_batch = sum([len(dataloader) for dataloader in dataloaders])
+        total_batch = len(dataloader)
         bar = tqdm(
             total       = total_batch, 
             position    = 1,
@@ -1830,47 +1835,111 @@ class WaterFormer(nn.Module):
         
         # Iterate through dataloaders
         batch_cnt = 0
-        for dataloader in dataloaders:
-            for (src, tgt, tgt_y) in dataloader:
-                # zero the parameter gradients
-                self.zero_grad(set_to_none=True)
+        for (src, tgt, tgt_y) in dataloader:
+            # zero the parameter gradients
+            self.zero_grad(set_to_none=True)
 
-                # Forward
-                with torch.autocast(device_type=self.device):
-                    # Make forecasts
-                    prediction = self(src, tgt)
-                    # Compute and backprop loss
-                    loss = loss_fn(prediction, tgt_y)
+            # Forward
+            with torch.autocast(device_type=self.device):
+                # Make forecasts
+                prediction = self(src, tgt)
+                # Compute and backprop loss
+                loss = loss_fn(prediction, tgt_y)
 
-                # Backward
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
+            # Backward
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
 
-                # Take optimizer step
-                optimizer.step()
+            # Take optimizer step
+            optimizer.step()
 
-                # CPU
-                dataloader_loss = loss.item()
-                total_loss += dataloader_loss
-                
-                # Add data to val_logger
-                if visual_logger != None:
-                    visual_logger.append_to_forecast_plotter(tgt_y, prediction)
-                    visual_logger.append_to_loss_console_plotter(dataloader_loss)
-
-                bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(batch_cnt+1)):.3f}", refresh=True)
-                batch_cnt += 1
-                bar.update()
-
+            # CPU
+            dataloader_loss = loss.item()
+            total_loss += dataloader_loss
+            
+            # Add data to val_logger
             if visual_logger != None:
-                visual_logger.signal_new_dataloader()
-            if profiler != None:
-                profiler.step()
+                visual_logger.append_to_forecast_plotter(tgt_y, prediction)
+                visual_logger.append_to_loss_console_plotter(dataloader_loss)
+
+            bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(batch_cnt+1)):.3f}", refresh=True)
+            batch_cnt += 1
+            bar.update()
+        if visual_logger != None:
+            visual_logger.signal_new_dataloader()
+        if profiler != None:
+            profiler.step()
         bar.colour = BLACK
         bar.close()
 
         return total_loss / total_batch
+    
+    def val(self,
+            dataloader: torch.utils.data.DataLoader,
+            loss_fn: torch.nn.MSELoss,
+            metrics: list,
+            visual_logger: Union[None, TransformerForecasterVisualLogger] = None,
+            profiler: Union[None, torch.profiler.profile] = None,
+            ) -> None:
+        # Metadata 
+        total_batch = len(dataloader)
 
+        # Start evaluation
+        self.eval()
+
+        additional_loss = {}
+        for additional_monitor in metrics:
+            additional_loss[str(type(additional_monitor))] = 0
+        
+        # Validation
+        test_loss = 0
+        correct = 0
+        bar = tqdm(
+            total       = total_batch, 
+            position    = 1,
+            colour      = GREEN,
+            )
+        batch_cnt = 0
+        with torch.no_grad():
+            for (src, tgt, tgt_y) in dataloader:
+                src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
+
+                with torch.autocast(device_type=self.device):
+                    pred = self(src, tgt)
+                    loss = loss_fn(pred, tgt_y)
+                    for additional_monitor in metrics:
+                        additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
+
+                # CPU part
+                loss_item = loss.item()
+                test_loss += loss_item
+                correct += (pred == tgt_y).type(torch.float).sum().item()
+
+                if visual_logger != None:
+                    visual_logger.append_to_forecast_plotter(tgt_y, pred)
+                    visual_logger.append_to_loss_console_plotter(loss_item)
+
+                bar.update()
+                bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)
+                batch_cnt += 1
+                if profiler != None:
+                    profiler.step()
+
+        if visual_logger != None:
+            visual_logger.signal_new_dataloader()
+        bar.colour = BLACK
+        bar.close()
+        test_loss /= total_batch
+        correct /= total_batch
+        
+        # Report
+        tqdm.write(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} ")
+        for additional_monitor in metrics:
+            name = str(type(additional_monitor))[8:-2].split(".")[-1]
+            loss = additional_loss[str(type(additional_monitor))] / total_batch
+            tqdm.write(f" {name}: {loss:>8f}")
+
+        return test_loss
 
 class WaterFormerDataset(torch.utils.data.Dataset):
     def __init__(
@@ -1881,6 +1950,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             input_sequence_size: int,
             output_sequence_size: int,
             *args, 
+            device: str = "cpu",
             **kwargs
             ) -> None:
         """
@@ -1918,10 +1988,19 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         """
         super().__init__(*args, **kwargs)
         self.tgt_y = tgt.copy()
+        self.feature_length = src.shape[1]
+        self.knowledge_length = int(input_sequence_size / self.feature_length)
+        # Calculate sequence length
         self.input_sequence_size = input_sequence_size
-        self.output_sequence_size = output_sequence_size
+        self.output_sequence_size = output_sequence_size # Forecast length
+        self.device = device
+
+        # Check if the input sequence size can be segmented in chunk
+        if input_sequence_size % src.shape[1] != 0:
+            cprint("Cannot divide the input sequence into full chunk", "red")
+            raise Exception
         
-        self._length = (src.shape[0] * src.shape[1]) - input_sequence_size - output_sequence_size
+        self._length = src.shape[0] - (self.input_sequence_size / src.shape[1]) - output_sequence_size
         if self._length <= 0:
             raise NotEnoughData
         
@@ -1933,6 +2012,9 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         cprint("Combine timestamp with target", "green")
         self.tgt = self._forge_timestamp_with_data(tgt, self.timestamp)
         cprint("Finish initialize", "green")
+
+        # Note the spatiotemporal_encoding_size
+        self.spatiotemporal_encoding_size = self.src.shape[1]
 
     def __len__(self) -> int:
         """Get the length of current dataset
@@ -1951,12 +2033,14 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         Returns:
             Tuple[torch.tensor, torch.tensor, torch.tensor]: src, tgt, tgt_y in sequence
         """
-        src = self.src[index: index + self.input_sequence_size]
-        tgt = self.tgt[index: index + self.input_sequence_size]
-        tgt_y = self.tgt_y[index + self.input_sequence_size: index + self.input_sequence_size + self.output_sequence_size]
+        _index *= self.feature_length
+        src = torch.tensor(self.src[_index: _index + self.input_sequence_size], device=self.device)
+        tgt = torch.tensor(self.tgt[_index: _index + self.input_sequence_size], device=self.device)
+        tgt_y = torch.tensor(self.tgt_y[index + self.knowledge_length: index + self.knowledge_length + self.output_sequence_size], device=self.device)
         return src, tgt, tgt_y
     
-    def _convert_timestamp(self, timestamp: Union[list, np.array]):
+    @staticmethod
+    def _convert_timestamp(timestamp: Union[list, np.array]):
         """Convert absolute timestamp to sinusoid timestamp
 
         The default behaviors are convert the input timestamp to sinusoid, cos representation with 
@@ -2045,7 +2129,8 @@ class WaterFormerDataset(torch.utils.data.Dataset):
 
         return sinusoid_timestamp
     
-    def _forge_timestamp_with_data(self, data: np.array, timestamp: np.array) -> np.array:
+    @staticmethod
+    def _forge_timestamp_with_data(data: np.array, timestamp: np.array) -> np.array:
         record_cnt: int = data.shape[0]
         feature_cnt: int = data.shape[1]
         # Reshape data
