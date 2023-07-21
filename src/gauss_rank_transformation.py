@@ -69,8 +69,11 @@ class GaussRankScaler(BaseEstimator, TransformerMixin):
         y
             Ignored
         """
+        # Remove rows with nan for fitting process
+        nan_mask = np.isnan(X).any(axis=1)
+        X_for_fit = X[~nan_mask]
         X = check_array(
-            X, copy=self.copy, estimator=self, dtype=FLOAT_DTYPES, force_all_finite=True
+            X_for_fit, copy=self.copy, estimator=self, dtype=FLOAT_DTYPES, force_all_finite=True
         )
 
         self.interp_func_ = Parallel(n_jobs=self.n_jobs)(
@@ -91,7 +94,7 @@ class GaussRankScaler(BaseEstimator, TransformerMixin):
             fill_value=self.fill_value,
         )
 
-    def transform(self, X, copy=None):
+    def transform(self, X: np.array, copy=None):
         """Scale the data with the Gauss Rank algorithm
         Parameters
         ----------
@@ -101,7 +104,11 @@ class GaussRankScaler(BaseEstimator, TransformerMixin):
             Copy the input X or not.
         """
         check_is_fitted(self, "interp_func_")
-
+        # Note the position of NaN
+        nan_mask = np.isnan(X).any(axis=1)
+        # Convert nan values to 0 for compatibility
+        X[nan_mask] = 0
+        
         copy = copy if copy is not None else self.copy
         X = check_array(
             X, copy=copy, estimator=self, dtype=FLOAT_DTYPES, force_all_finite=True
@@ -112,6 +119,8 @@ class GaussRankScaler(BaseEstimator, TransformerMixin):
                 delayed(self._transform)(i, x) for i, x in enumerate(X.T)
             )
         ).T
+
+        X[nan_mask] = np.nan
         return X
 
     def _transform(self, i, x):
@@ -151,6 +160,40 @@ class GaussRankScaler(BaseEstimator, TransformerMixin):
         )
         return inv_interp_func(erf(x))
 
+    def fit_transform(self, X, y=None, **fit_params):
+        """
+        Fit to data, then transform it.
+
+        Fits transformer to `X` and `y` with optional parameters `fit_params`
+        and returns a transformed version of `X`.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Input samples.
+
+        y :  array-like of shape (n_samples,) or (n_samples, n_outputs), \
+                default=None
+            Target values (None for unsupervised transformations).
+
+        **fit_params : dict
+            Additional fit parameters.
+
+        Returns
+        -------
+        X_new : ndarray array of shape (n_samples, n_features_new)
+            Transformed array.
+        """
+        # non-optimized default implementation; override when a better
+        # method is possible for a given clustering algorithm
+
+        if y is None:
+            # fit method of arity 1 (unsupervised transformation)
+            return self.fit(X, **fit_params).transform(X)
+        else:
+            # fit method of arity 2 (supervised transformation)
+            return self.fit(X, y, **fit_params).transform(X)
+        
     @staticmethod
     def drop_duplicates(x):
         is_unique = np.zeros_like(x, dtype=bool)
