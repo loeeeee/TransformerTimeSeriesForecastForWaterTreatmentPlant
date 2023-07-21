@@ -1039,596 +1039,11 @@ class TransformerClassifierVisualLogger(TransformerForecasterVisualLogger):
                                             
 """
         
-class TimeSeriesTransformer(nn.Module):
-    """
-    Loe learned a lot doing this
-    """
-    def __init__(self, 
-                 input_size: int,
-                 knowledge_length: int,
-                 forecast_length: int,
-                 device: str,
-                 metadata: dict,
-                 *args, 
-                 embedding_dimension: int               = 512,
-                 multi_head_attention_head_size: int    = 8,
-                 num_of_encoder_layers: int             = 4,
-                 num_of_decoder_layers: int             = 4,
-                 model_name: str                        = "time_series_transformer",
-                 **kwargs
-                 ) -> None:
-        """
-        input_size: number of features
-        metadata: store something not used in the model, but essential to evaluation
-        forecast_feature_size: number of features to forecast
-        embedding_dimension: the internal dimension of the model
-        multi_head_attention_head_size: number of head of the attention layer, 
-            applied to all the attention layers
-        num_of_encoder_layers: literally
-        num_of_decoder_layers: literally
-        """
-        super().__init__()
-        # Store all the args and kwargs for restoring
-        self.args = [
-            input_size,
-            knowledge_length,
-            forecast_length,
-            device,
-            metadata,
-        ]
-        self.kwargs = {
-            "embedding_dimension":              embedding_dimension,
-            "multi_head_attention_head_size":   multi_head_attention_head_size,
-            "num_of_encoder_layers":            num_of_encoder_layers,
-            "num_of_decoder_layers":            num_of_decoder_layers,
-            "model_name":                       model_name,
-        }
-        
-        self.model_name = model_name
-        self.device = device
-
-        # Force the model only have one output feature
-        _forecast_feature_size = 1
-
-        # Input embedding
-        self.encoder_input_layer = nn.Linear(
-            in_features     = input_size, 
-            out_features    = embedding_dimension
-        )
-        
-        # Output embedding
-        self.decoder_input_layer = nn.Linear(
-            in_features     = _forecast_feature_size,
-            out_features    = embedding_dimension
-        )
-        
-        # Final forecast output of decoder
-        self.final_output = nn.Linear(
-            in_features     = embedding_dimension,
-            out_features    = _forecast_feature_size
-        )
-
-        # Positional encoding layer after the encoder input
-        self.encoder_positional_encoder_layer = PositionalEncoding(
-            d_model         = embedding_dimension
-        )
-
-        # Positional encoding layer after the decoder input
-        self.decoder_positional_encoder_layer = PositionalEncoding(
-            d_model         = embedding_dimension
-        )
-
-        # Example encoder layer to pass into nn.TransformerEncoder
-        example_encoder = nn.TransformerEncoderLayer(
-            d_model         = embedding_dimension,
-            nhead           = multi_head_attention_head_size,
-        )
-        encoder_norm_layer = nn.BatchNorm1d(
-            num_features    = embedding_dimension, # TODO
-        )
-
-        # Build encoder with the encoder layers
-        self.encoder = nn.TransformerEncoder(
-            encoder_layer   = example_encoder,
-            num_layers      = num_of_encoder_layers,
-            norm            = None
-        )
-
-        # Example decoder layer to pass into nn.TransformerDecoder
-        example_decoder = nn.TransformerDecoderLayer(
-            d_model         = embedding_dimension,
-            nhead           = multi_head_attention_head_size
-        )
-        decoder_norm_layer = nn.BatchNorm1d(
-            num_features    = embedding_dimension,
-        )
-
-        # Build decoder with the decoder layers
-        self.decoder = nn.TransformerDecoder(
-            decoder_layer   = example_decoder,
-            num_layers      = num_of_decoder_layers,
-            norm            = None
-        )
-    
-    def forward(self, 
-                src: torch.Tensor, 
-                tgt: torch.Tensor,
-                ) -> torch.Tensor:
-        # Before encoder
-        src = self.encoder_input_layer(src)
-
-        # Encoder positional encoding layer
-        src = self.encoder_positional_encoder_layer(src)
-
-        # Encoder
-        src = self.encoder(src)
-
-        # Before decoder
-        tgt = self.decoder_input_layer(tgt)
-
-        # Decoder positional encoding layer
-        tgt = self.decoder_positional_encoder_layer(tgt)
-
-        # Decoder
-        combined = self.decoder(
-            tgt         = tgt,
-            memory      = src,
-        )
-
-        # Final linear layer
-        forecast = self.final_output(combined)
-
-        return forecast
-        
-    def dump_hyper_parameters(self, dir: str) -> None:
-        """Storing hyper parameters in json files for later inference
-
-        Args:
-            dir (str): directory where the json is stored
-        """
-        args_dir = os.path.join(dir, "args.json")
-        kwargs_dir = os.path.join(dir, "kwargs.json")
-        with open(args_dir, "w", encoding="utf-8") as f:
-            json.dump(self.args, f, indent=2)
-
-        with open(kwargs_dir, "w", encoding="utf-8") as f:
-            json.dump(self.kwargs, f, indent=2)
-        return
-    
-    def get_metadata(self) -> dict:
-        return self.args[4]
-    
-    def learn(self,
-              dataloaders: list[torch.utils.data.DataLoader],
-              loss_fn: any,
-              optimizer: torch.optim,
-              vis_logger: Union[None, TransformerForecasterVisualLogger] = None,
-              profiler: torch.profiler.profile = None
-              ) -> float:
-        """
-        Return the loss of the training
-        """
-        # Start training
-        self.train()
-
-        # Metadata
-        total_length = sum([len(dataloader) for dataloader in dataloaders])
-        bar = tqdm(
-            total       = total_length, 
-            position    = 1,
-            colour      = GREEN,
-            )
-        total_loss = 0
-        
-        # Iterate through dataloaders
-        batch_cnt = 0
-        for dataloader in dataloaders:
-            for (src, tgt, tgt_y) in dataloader:
-                src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
-
-                # zero the parameter gradients
-                for param in self.parameters():
-                    param.grad = None
-                
-                # Forward
-                with torch.autocast(device_type=self.device):
-                    # Make forecasts
-                    prediction = self(src, tgt)
-                    # Compute and backprop loss
-                    loss = loss_fn(prediction, tgt_y)
-
-                # Backward
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
-
-                # Take optimizer step
-                optimizer.step()
-
-                # CPU
-                dataloader_loss = loss.item()
-                total_loss += dataloader_loss
-                
-                # Add data to val_logger
-                if vis_logger != None:
-                    vis_logger.append_to_forecast_plotter(tgt_y, prediction)
-                    vis_logger.append_to_loss_console_plotter(dataloader_loss)
-
-                bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(batch_cnt+1)):.3f}", refresh=True)
-                batch_cnt += 1
-                bar.update()
-
-            if vis_logger != None:
-                vis_logger.signal_new_dataloader()
-            if profiler != None:
-                profiler.step()
-        bar.colour = BLACK
-        bar.close()
-
-        return total_loss/total_length
-    
-    def val(self,
-            dataloaders: list[torch.utils.data.DataLoader],
-            loss_fn: any,
-            metrics: list,
-            vis_logger: Union[None, TransformerForecasterVisualLogger] = None,
-            ) -> float:
-        """
-        Which to plot: receive a list that contains the forecast sequence needed to be plotted
-        scaler: receive a tuple, (average, stddev). The scaler is used to reproduce original values, instead of the normalized ones.
-        Return the loss of validation
-        """
-        # Metadata
-        total_batches = sum([len(dataloader) for dataloader in dataloaders])
-
-        # Start evaluation
-        self.eval()
-
-        additional_loss = {}
-        for additional_monitor in metrics:
-            additional_loss[str(type(additional_monitor))] = 0
-        
-        # Validation
-        with torch.no_grad():
-            test_loss = 0
-            correct = 0
-            bar = tqdm(
-                total       = total_batches, 
-                position    = 1,
-                colour      = GREEN,
-                )
-            batch_cnt = 0
-            for dataloader in dataloaders:
-                for (src, tgt, tgt_y) in dataloader:
-                    src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
-
-                    with torch.autocast(device_type=self.device):
-                        pred = self(src, tgt)
-                        loss = loss_fn(pred, tgt_y)
-
-                    # CPU part
-                    loss_item = loss.item()
-                    test_loss += loss_item
-                    # TODO: Check accuracy calculation
-                    correct += (pred == tgt_y).type(torch.float).sum().item()
-
-                    if vis_logger != None:
-                        vis_logger.append_to_forecast_plotter(tgt_y, pred)
-                        vis_logger.append_to_loss_console_plotter(loss_item)
-
-                    for additional_monitor in metrics:
-                        additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
-                    bar.update()
-                    bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)
-                    batch_cnt += 1
-                if vis_logger != None:
-                    vis_logger.signal_new_dataloader()
-            bar.colour = BLACK
-            bar.close()
-        test_loss /= total_batches
-        correct /= total_batches
-        
-        # Report
-        tqdm.write(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} ")
-        for additional_monitor in metrics:
-            name = str(type(additional_monitor))[8:-2].split(".")[-1]
-            loss = additional_loss[str(type(additional_monitor))] / total_batches
-            tqdm.write(f" {name}: {loss:>8f}")
-
-        return test_loss
-
-
-class ClassifierTransformer(TimeSeriesTransformer):
-    def __init__(self, 
-                 input_size: int,
-                 forecast_feature_size: int,
-                 metadata: dict,
-                 *args, 
-                 embedding_dimension: int               = 512,
-                 multi_head_attention_head_size: int    = 8,
-                 num_of_encoder_layers: int             = 4,
-                 num_of_decoder_layers: int             = 4,
-                 model_name: str                        = "time_series_transformer",
-                 **kwargs
-                 ) -> None:
-        """
-        input_size: number of features
-        forecast_feature_size: number of features to forecast
-        embedding_dimension: the internal dimension of the model
-        multi_head_attention_head_size: number of head of the attention layer, 
-            applied to all the attention layers
-        num_of_encoder_layers: literally
-        num_of_decoder_layers: literally
-        """
-        super().__init__(
-            input_size,
-            metadata,
-            *args, 
-            embedding_dimension = embedding_dimension,
-            multi_head_attention_head_size = multi_head_attention_head_size,
-            num_of_encoder_layers = num_of_encoder_layers,
-            num_of_decoder_layers= num_of_decoder_layers,
-            model_name = model_name,
-            **kwargs
-        )
-        # Store all the args and kwargs for restoring
-        self.args = [
-            input_size,
-            forecast_feature_size,
-            metadata,
-        ]
-        
-        self.model_name = model_name
-
-        # Output embedding
-        self.decoder_input_layer = nn.Linear(
-            in_features     = forecast_feature_size,
-            out_features    = embedding_dimension,
-        )
-        
-        # Final forecast output of decoder
-        self.final_output = nn.Linear(
-            in_features     = embedding_dimension,
-            out_features    = forecast_feature_size
-        )
-
-    def forward(self, 
-                src: torch.Tensor, 
-                tgt: torch.Tensor,
-                ) -> torch.Tensor:
-        result = super().forward(src, tgt)
-        return result
-    
-    def learn(self,
-              dataloaders: list[torch.utils.data.DataLoader],
-              loss_fn: any,
-              optimizer: torch.optim,
-              vis_logger: Union[None, TransformerForecasterVisualLogger] = None,
-              ) -> float:
-        """
-        Return the loss of the training
-        """
-        # Start training
-        self.train()
-
-        # Metadata
-        total_length = sum([len(dataloader) for dataloader in dataloaders])
-        bar = tqdm(
-            total       = total_length, 
-            position    = 1,
-            colour      = GREEN,
-            )
-        total_loss = 0
-        
-        # Iterate through dataloaders
-        batch_cnt = 0
-        for dataloader in dataloaders:
-            for (src, tgt, tgt_y) in dataloader:
-                src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
-
-                # zero the parameter gradients
-                for param in self.parameters():
-                    param.grad = None
-
-                # Make forecasts
-                prediction = self(src, tgt)
-
-                # Compute and backprop loss
-                transformed_prediction = torch.permute(prediction, (1, 2, 0))
-                transformed_tgt_y = torch.permute(tgt_y, (1, 2, 0))
-
-                loss = loss_fn(transformed_prediction, transformed_tgt_y)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
-
-                # Take optimizer step
-                optimizer.step()
-
-                # Add data to val_logger
-                if vis_logger != None:
-                    vis_logger.append_to_forecast_plotter(tgt_y, prediction)
-                    vis_logger.append_to_loss_console_plotter(loss.item())
-
-                total_loss += loss.item()
-                bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(batch_cnt+1)):.3f}", refresh=True)
-                batch_cnt += 1
-                bar.update()
-            if vis_logger != None:
-                vis_logger.signal_new_dataloader()
-        bar.colour = BLACK
-        bar.close()
-
-        return total_loss/total_length
-    
-    def val(self,
-            dataloaders: list[torch.utils.data.DataLoader],
-            loss_fn: any,
-            metrics: list,
-            vis_logger: Union[None, TransformerForecasterVisualLogger] = None,
-            ) -> float:
-        """
-        Which to plot: receive a list that contains the forecast sequence needed to be plotted
-        scaler: receive a tuple, (average, stddev). The scaler is used to reproduce original values, instead of the normalized ones.
-        Return the loss of validation
-        """
-        # Metadata
-        total_batches = sum([len(dataloader) for dataloader in dataloaders])
-
-        # Start evaluation
-        self.eval()
-
-        additional_loss = {}
-        for additional_monitor in metrics:
-            additional_loss[str(type(additional_monitor))] = 0
-
-        # Validation
-        with torch.no_grad():
-            test_loss = 0
-            correct = 0
-            bar = tqdm(
-                total       = total_batches, 
-                position    = 1,
-                colour      = GREEN,
-                )
-            batch_cnt = 0
-            for dataloader in dataloaders:
-                for (src, tgt, tgt_y) in dataloader:
-                    src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
-
-                    pred = self(src, tgt)
-
-                    # The transformation is for the input format requirement of the CrossEntropy
-                    transformed_prediction = torch.permute(pred, (1, 2, 0))
-                    transformed_tgt_y = torch.permute(tgt_y, (1, 2, 0))
-
-                    loss = loss_fn(transformed_prediction, transformed_tgt_y).item()
-                    test_loss += loss
-                    correct += (pred == tgt_y).type(torch.float).sum().item()
-
-                    if vis_logger != None:
-                        vis_logger.append_to_forecast_plotter(tgt_y, pred)
-                        vis_logger.append_to_loss_console_plotter(loss)
-
-                    for additional_monitor in metrics:
-                        additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
-                    bar.update()
-                    bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)
-                    batch_cnt += 1
-                if vis_logger != None:
-                    vis_logger.signal_new_dataloader()
-            bar.colour = BLACK
-            bar.close()
-        test_loss /= total_batches
-        correct /= total_batches
-        
-        # Report
-        tqdm.write(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} ")
-        for additional_monitor in metrics:
-            name = str(type(additional_monitor))[8:-2].split(".")[-1]
-            loss = additional_loss[str(type(additional_monitor))] / total_batches
-            tqdm.write(f" {name}: {loss:>8f}")
-
-        return test_loss
-        
-    def get_metadata(self) -> dict:
-        return self.args[2]
-
-"""
-
-██████╗  █████╗ ████████╗ █████╗ ███████╗███████╗████████╗
-██╔══██╗██╔══██╗╚══██╔══╝██╔══██╗██╔════╝██╔════╝╚══██╔══╝
-██║  ██║███████║   ██║   ███████║███████╗█████╗     ██║   
-██║  ██║██╔══██║   ██║   ██╔══██║╚════██║██╔══╝     ██║   
-██████╔╝██║  ██║   ██║   ██║  ██║███████║███████╗   ██║   
-╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚══════╝╚══════╝   ╚═╝   
-                                                          
-"""
-
-class TransformerDataset(torch.utils.data.Dataset):
-    """
-    Hand-crafted dataset for transformer
-    knowledge_length: the amount of time series data the transformer model will know to make forecast
-    forecast_length: the amount of the time series data the transformer model will forecast given the information
-    """
-    def __init__(self,
-                 src: pd.DataFrame,
-                 tgt: pd.DataFrame,
-                 knowledge_length: int,
-                 forecast_length: int,
-                 device: str,
-                 ) -> None:
-        super().__init__()
-        self.src = src
-        self.tgt = tgt
-        self.knowledge_length = knowledge_length
-        self.forecast_length = forecast_length
-        return
-    
-    def __len__(self) -> int:
-        return (self.src.shape[0] - self.forecast_length - self.knowledge_length)
-    
-    def __getitem__(self, knowledge_start: int) -> Tuple[torch.tensor, torch.tensor, torch.tensor]:
-        """
-        Here is what the src would look like:
-
-        src = [xt-4, xt-3, xt-2, xt-1, xt]
-
-        where x denotes the series we're dealing with, e.g. electricity prices.
-
-        The objective is to predict tgt_y which would be:
-
-        tgt_y = [xt+1, xt+2, xt+3]
-
-        So our tgt , which the model needs as input in order to make its forecast for tgt_y , should be:
-
-        tgt = [xt, xt+1, xt+2]
-        """
-        result_src = self.src[knowledge_start:
-                               knowledge_start + self.knowledge_length]
-        result_tgt = self.tgt[knowledge_start + self.knowledge_length - 1: 
-                              knowledge_start + self.knowledge_length - 1 + self.forecast_length]
-        result_tgt_y = self.tgt[knowledge_start + self.knowledge_length: 
-                                knowledge_start + self.knowledge_length + self.forecast_length]
-        return result_src, result_tgt, result_tgt_y
-    
-
-def transformer_collate_fn(data):
-    """
-    src, tgt, tgt_y
-    structure of data:
-        [
-            [
-                [src
-                
-                ],
-                [tgt
-                
-                ],
-                [tgt_y
-                
-                ]
-            ],
-            [
-                [src
-                
-                ],
-                [...
-                
-                ],
-                ...
-            ],
-            ...
-        ]
-    """
-    result = [[], [], []]
-    for i in range(3):
-        result[i] = [temp[i] for temp in data]
-        result[i] = torch.stack(result[i])
-    return result[0], result[1], result[2]
-        
 class NotEnoughLayerToAverage(Exception):
     def __init__(self):            
         # Call the base class constructor with the parameters it needs
         super().__init__("Not enough layer to average")
+
 
 class SequenceLengthDoesNotMatch(Exception):
     def __init__(self):            
@@ -1970,6 +1385,53 @@ class WaterFormer(nn.Module):
 
         return test_loss
 
+
+"""
+
+██████╗  █████╗ ████████╗ █████╗ ███████╗███████╗████████╗
+██╔══██╗██╔══██╗╚══██╔══╝██╔══██╗██╔════╝██╔════╝╚══██╔══╝
+██║  ██║███████║   ██║   ███████║███████╗█████╗     ██║   
+██║  ██║██╔══██║   ██║   ██╔══██║╚════██║██╔══╝     ██║   
+██████╔╝██║  ██║   ██║   ██║  ██║███████║███████╗   ██║   
+╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚══════╝╚══════╝   ╚═╝   
+                                                          
+"""  
+
+def transformer_collate_fn(data):
+    """
+    src, tgt, tgt_y
+    structure of data:
+        [
+            [
+                [src
+                
+                ],
+                [tgt
+                
+                ],
+                [tgt_y
+                
+                ]
+            ],
+            [
+                [src
+                
+                ],
+                [...
+                
+                ],
+                ...
+            ],
+            ...
+        ]
+    """
+    result = [[], [], []]
+    for i in range(3):
+        result[i] = [temp[i] for temp in data]
+        result[i] = torch.stack(result[i])
+    return result[0], result[1], result[2]
+
+
 class WaterFormerDataset(torch.utils.data.Dataset):
     def __init__(
             self, 
@@ -2022,6 +1484,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         self.knowledge_length = int(input_sequence_size / self.src_feature_length)
         # Calculate sequence length
         self.input_sequence_size = input_sequence_size
+        print(f"input sequence size: {input_sequence_size}")
         self.output_sequence_size = output_sequence_size # Forecast length
         self.device = device
 
@@ -2030,7 +1493,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             cprint("Cannot divide the input sequence into full chunk", "red")
             raise Exception
         
-        self._length = src.shape[0] - (self.input_sequence_size / src.shape[1]) - output_sequence_size
+        self._length = src.shape[0] - self.knowledge_length - output_sequence_size - 1
         if self._length <= 0:
             raise NotEnoughData
         else:
