@@ -4,11 +4,12 @@ This transformer code works on the fully normalized input, and multiply the loss
 import settings # Get config
 
 from helper import *
-from transformer import TimeSeriesTransformer, TransformerDataset, TransformerForecasterVisualLogger, transformer_collate_fn, NotEnoughData
+from transformer import WaterFormer, TransformerForecasterVisualLogger, transformer_collate_fn, WaterFormerDataset
 
 import torch
 from torch import nn
 
+import numpy as np
 import pandas as pd
 
 from tqdm import tqdm
@@ -64,74 +65,39 @@ RAW_COLUMNS = [
     "PAC pump 2 speed",
 ]
 
-TIME_COLUMNS = [
-    "year",
-    "date_x",
-    "date_y",
-    "time_x",
-    "time_y",
-]
-
 X_COLUMNS = RAW_COLUMNS[:-4]
 Y_COLUMNS = RAW_COLUMNS[-4:]
 
 TGT_COLUMNS = RAW_COLUMNS[-4]
 
 # Read scaling factors
-def load_scaling_factors(x_or_y: Literal['x', 'y']) -> dict:
-    """Load scaling factors from data/processed
+def load_scaled_national_standards() -> dict:
+    """Load scaled national standards from data
 
     Returns:
         dict: scaling factors in dict format 
             result:
-                column: (scaling factors, stddev)\n
-                column: (scaling factors, stddev)\n
-                column: (scaling factors, stddev)
+                column: value\n
+                column: value\n
+                column: value
     """
-    scaling_factors_path = os.path.join(
-        DATA_DIR, f"{x_or_y}_scaling_factors.json"
+    scaled_national_standards_path = os.path.join(
+        DATA_DIR, "scaled_national_standards.json"
         )
-    with open(scaling_factors_path, "r", encoding="utf-8") as f:
+    with open(scaled_national_standards_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     return data
-
-def load_national_standards() -> dict:
-    """Load national standard from data/GB
-
-    Returns:
-        dict: scaling factors in dict format 
-            result:
-                chemical: standard\n
-                chemical: standard\n
-                chemical: standard
-    """
-    data = pd.read_csv(
-        os.path.join(
-        RAW_DIR, "GB18918-2002.csv"
-        ),
-        index_col=0,
-    )
-    result = {}
-    for index, row in data.iterrows():
-        result[row[0]] = row[1]
-    return result
-
-def generate_src_columns() -> None:
-    _ = X_COLUMNS.copy()
-    _.extend(TIME_COLUMNS)
-    return _
 
 # HYPERPARAMETER
 HYPERPARAMETER = {
     "knowledge_length":             32,     # 4 hours
     "forecast_length":              2,      # 1 hour
-    "embedding_dimension":          1024,
-    "batch_size":                   64,    # 32 is pretty small
-    "train_val_split_ratio":        0.5,
-    "x_scaling_factors":            load_scaling_factors('x'),
-    "y_scaling_factors":            load_scaling_factors('y'),
-    "national_standards":           load_national_standards(),
-    "src_columns":                  generate_src_columns(),
+    "input_sequence_size":          None,   # Generated on the fly
+    "spatiotemporal_encoding_size": None,   # Generated on the fly
+    "batch_size":                   32,    # 32 is pretty small
+    "train_val_split_ratio":        0.8,
+    "scaled_national_standards":    load_scaled_national_standards(),
+    "src_columns":                  X_COLUMNS,
     "tgt_columns":                  TGT_COLUMNS,
     "tgt_y_columns":                TGT_COLUMNS,
     "random_seed":                  42,
@@ -146,84 +112,6 @@ cprint(f"Target columns: {HYPERPARAMETER['tgt_columns']}", "green")
 # Helper
 
 # Subprocess
-def csv_to_loader(
-        csv_dir: str,
-        device: str,
-        ) -> torch.utils.data.DataLoader:
-    # Read csv
-    data = pd.read_csv(
-        csv_dir,
-        low_memory=False,
-        index_col=0,
-        parse_dates=["timestamp"],
-    )
-    
-    # Downcast data
-    data = to_numeric_and_downcast_data(data)
-    
-    # Make sure data is in ascending order by timestamp
-    data.sort_values(by=["timestamp"], inplace=True)
-    
-    # Split data
-    src = data[HYPERPARAMETER["src_columns"]]
-    tgt = data[HYPERPARAMETER["tgt_columns"]]
-
-    # Drop data that is too short for the prediction
-    if len(tgt.values) < HYPERPARAMETER["forecast_length"] + HYPERPARAMETER["knowledge_length"]:
-        print(f"Drop {colored(csv_dir, 'red' )}")
-        raise NotEnoughData
-    
-    src = torch.tensor(src.values, dtype=torch.float32, device=device)
-    tgt = torch.tensor(tgt.values, dtype=torch.float32, device=device).unsqueeze(1)
-    
-    dataset = TransformerDataset(
-        src,
-        tgt,
-        HYPERPARAMETER["knowledge_length"],
-        HYPERPARAMETER["forecast_length"],
-        device,
-        )
-
-    loader = torch.utils.data.DataLoader(
-        dataset,    
-        HYPERPARAMETER["batch_size"],
-        drop_last=False,
-        collate_fn=transformer_collate_fn,
-    )
-    return loader
-
-def load(path: str, device: str, train_val_split: float=0.8) -> list:
-    csv_files = []
-    pattern = re.compile(r'\d+')
-
-    # Iterate over all files in the directory
-    for filename in os.listdir(path):
-        if filename.endswith('.csv'):
-            csv_files.append(filename)
-
-    # Sort the CSV files based on the numbers in their filenames
-    csv_files.sort(key=lambda x: int(pattern.search(x).group()))
-    
-    if len(csv_files) == 0:
-        raise FileNotFoundError
-    
-    # Compose train loader
-    train_val = []
-    for csv_file in csv_files:
-        current_csv = os.path.join(path, csv_file)
-        try:
-            train_val.append(csv_to_loader(current_csv, device))
-        except NotEnoughData:
-            continue
-    
-    # Make more stable training
-    random.seed(HYPERPARAMETER["random_seed"])
-    random.shuffle(train_val)
-    train = train_val[:int(len(csv_files)*train_val_split)]
-    val = train_val[int(len(csv_files)*train_val_split):]
-
-    cprint(f"{len(train)}, {len(val)}", "green")
-    return train, val
 
 def save_data(
         src: str, 
@@ -255,23 +143,60 @@ def save_data(
 def main() -> None:
     print(colored(f"Using {DEVICE} for training", "black", "on_green"), "\n")
 
-    train_loaders, val_loaders = load(
-        INPUT_DATA, 
-        DEVICE,
-        train_val_split=HYPERPARAMETER["train_val_split_ratio"]
+    # Read data and do split
+    data = pd.read_csv(
+        INPUT_DATA,
+        low_memory=False,
+        index_col=0,
+        parse_dates=["timestamp"],
+    )
+    train_size = int(data.shape[0] * HYPERPARAMETER["train_val_split_ratio"])
+    val_size = data.shape[0] - train_size
+    
+    def dataframe_to_loader(
+            data: pd.DataFrame,
+            ) -> torch.utils.data.DataLoader:
+        # Downcast data
+        data = to_numeric_and_downcast_data(data.copy())
+        
+        # Make sure data is in ascending order by timestamp
+        data.sort_values(by=["timestamp"], inplace=True)
+        
+        # Split data
+        src = np.array(data[HYPERPARAMETER["src_columns"]].values)
+        tgt = np.expand_dims(np.array(data[HYPERPARAMETER["tgt_columns"]].values), axis=1)
+        timestamp = data.reset_index(names="timestamp")["timestamp"].to_numpy(dtype=np.datetime64)
+        
+        dataset = WaterFormerDataset(
+            src,
+            tgt,
+            timestamp,
+            HYPERPARAMETER["knowledge_length"] * src.shape[1],
+            HYPERPARAMETER["forecast_length"],
+            device=DEVICE,
         )
+        HYPERPARAMETER["input_sequence_size"] = dataset.input_sequence_size
+        HYPERPARAMETER["spatiotemporal_encoding_size"] = dataset.spatiotemporal_encoding_size
+
+        loader = torch.utils.data.DataLoader(
+            dataset,
+            HYPERPARAMETER["batch_size"],
+            drop_last=False,
+            collate_fn=transformer_collate_fn,
+        )
+        return loader
+    
+    train_loader = dataframe_to_loader(data.head(train_size))
+    val_loader = dataframe_to_loader(data.tail(val_size))
+    
     # Model
-    model: TimeSeriesTransformer = TimeSeriesTransformer(
-        INPUT_FEATURE_SIZE,
-        HYPERPARAMETER["knowledge_length"],
+    model: WaterFormer = WaterFormer(
+        HYPERPARAMETER["input_sequence_size"],
         HYPERPARAMETER["forecast_length"],
-        DEVICE,
-        HYPERPARAMETER,
-        model_name = MODEL_NAME,
-        embedding_dimension = HYPERPARAMETER["embedding_dimension"],
-        num_of_decoder_layers = 8,
-        num_of_encoder_layers = 8,
+        HYPERPARAMETER["spatiotemporal_encoding_size"],
+        device=DEVICE
     ).to(DEVICE)
+
     print(colored("Model structure:", "black", "on_green"), "\n")
     print(model)
 
@@ -290,12 +215,6 @@ def main() -> None:
         T_0 = 5,
     )
     scheduler = torch.optim.lr_scheduler.ChainedScheduler([scheduler_0, scheduler_1])
-    """
-    scheduler_2 = torch.optim.lr_scheduler.ExponentialLR(
-        optimizer = optimizer,
-        gamma = 0.1,
-    )
-    """
     t_epoch = TrackerEpoch(50)
     t_val_loss = TrackerLoss(10, model)
     t_train_loss = TrackerLoss(-1, model)
@@ -342,10 +261,10 @@ def main() -> None:
                 tqdm.write(colored("--------------------------------------------", "cyan", attrs=["bold"]))
 
                 train_loss = model.learn(
-                    train_loaders, 
+                    train_loader, 
                     loss_fn, 
                     optimizer, 
-                    vis_logger = train_logger,
+                    visual_logger = train_logger,
                     #profiler=profiler,
                 )
                 note = f"{str(type(loss_fn))[7:-2].split('.')[-1]}: {train_loss}"
@@ -353,17 +272,15 @@ def main() -> None:
                 bar.refresh()
 
                 val_loss = model.val(
-                    val_loaders, 
+                    val_loader, 
                     loss_fn, 
                     metrics,
-                    vis_logger = val_logger,
+                    visual_logger = val_logger,
                     )
                 note = f"{str(type(loss_fn))[7:-2].split('.')[-1]}: {val_loss}"
                 val_logger.signal_new_epoch(note=note)
 
-                #scheduler_0.step()
                 scheduler.step()
-                #scheduler_2.step()
 
                 if not t_val_loss.check(val_loss, model):
                     tqdm.write(colored("Validation loss no longer decrease, finish training", "green", "on_red"))

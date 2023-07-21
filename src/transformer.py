@@ -1028,31 +1028,6 @@ class TransformerClassifierVisualLogger(TransformerForecasterVisualLogger):
             plot_interval=plot_interval,
             format=format
         )
-
-
-class PositionalEncoding(nn.Module):
-    """
-    Copied from pytorch tutorial
-    """
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(max_len, 1, d_model)
-        pe[:, 0, 0::2] = torch.sin(position * div_term)
-        pe[:, 0, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Arguments:
-            x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
-        """
-        x = x + self.pe[:x.size(0)]
-        return self.dropout(x)
-    
 """
 
 ███╗   ███╗ ██████╗ ██████╗ ███████╗██╗     
@@ -1648,7 +1623,6 @@ def transformer_collate_fn(data):
     for i in range(3):
         result[i] = [temp[i] for temp in data]
         result[i] = torch.stack(result[i])
-        result[i] = result[i].permute(1, 0, 2)
     return result[0], result[1], result[2]
         
 class NotEnoughLayerToAverage(Exception):
@@ -1661,6 +1635,55 @@ class SequenceLengthDoesNotMatch(Exception):
         # Call the base class constructor with the parameters it needs
         super().__init__("Sequence length does not match")
 
+
+class PositionalEncoding(nn.Module):
+    """
+    Copied from pytorch tutorial
+    """
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, batch_first: bool = False, device: str = "cpu"):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+        self.device = device
+        # TODO: Implement batch_first
+        position = torch.arange(max_len, device=device).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2, device=device) * (-math.log(10000.0) / d_model))
+        if batch_first:
+            pe = torch.zeros(1, max_len, d_model, device=device)
+            pe[0, :, 0::2] = torch.sin(position * div_term)
+            pe[0, :, 1::2] = torch.cos(position * div_term)
+            self.forward = self._forward_batch_first
+        else:
+            pe = torch.zeros(max_len, 1, d_model, device=device)
+            pe[:, 0, 0::2] = torch.sin(position * div_term)
+            pe[:, 0, 1::2] = torch.cos(position * div_term)
+            self.forward = self._forward_not_batch_first
+        self.register_buffer('pe', pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Arguments:
+            x: Tensor, shape ``[seq_len, batch_size, embedding_dim]`` if batch_first is False
+            x: Tensor, shape ``[batch_size, seq_len, embedding_dim]`` if batch_first is True
+        """
+        raise Exception
+    
+    def _forward_batch_first(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Arguments:
+            x: Tensor, shape ``[batch_size, knowledge_length, embedding_dim]`` if batch_first is True
+        """
+        x = x + self.pe[0, :x.size(1), :]
+        return self.dropout(x)
+    
+    def _forward_not_batch_first(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Arguments:
+            x: Tensor, shape ``[knowledge_length, batch_size, embedding_dim]`` if batch_first is False
+        """
+        x = x + self.pe[:x.size(0)]
+        return self.dropout(x)
+    
+
 class WaterFormer(nn.Module):
     def __init__(
             self,
@@ -1670,8 +1693,8 @@ class WaterFormer(nn.Module):
             *args,
             encoder_layer_cnt: int = 8,
             decoder_layer_cnt: int = 8,
-            encoder_layer_head_cnt: int = 8,
-            decoder_layer_head_cnt: int = 8,
+            encoder_layer_head_cnt: int = 7,
+            decoder_layer_head_cnt: int = 7,
             average_last_n_decoder_output: int = 4,
             device: str = "cpu",
             **kwargs,
@@ -1711,17 +1734,21 @@ class WaterFormer(nn.Module):
         
         # Encoder positional encoding
         self.encoder_positional_encoding = PositionalEncoding(
-            d_model=input_sequence_size,
+            d_model=spatiotemporal_encoding_size,
+            batch_first=True,
+            device=device,
         )
 
         # Decoder positional encoding
         self.decoder_positional_encoding = PositionalEncoding(
-            d_model=input_sequence_size,
+            d_model=spatiotemporal_encoding_size,
+            batch_first=True,
+            device=device,
         )
 
         # Encoder layers
         encoder_layer_example = nn.TransformerEncoderLayer(
-            d_model=input_sequence_size,
+            d_model=spatiotemporal_encoding_size,
             nhead=encoder_layer_head_cnt,
             batch_first=isBatchFirst,
             device=device,
@@ -1733,10 +1760,11 @@ class WaterFormer(nn.Module):
             enable_nested_tensor=False,
         )
 
+        # TODO Create mask for decoder
         # Decoder layers
         self.decoder_layers = [
             nn.TransformerDecoderLayer(
-                d_model=input_sequence_size,
+                d_model=spatiotemporal_encoding_size,
                 nhead=decoder_layer_head_cnt,
                 batch_first=isBatchFirst,
                 device=device,
@@ -1808,8 +1836,7 @@ class WaterFormer(nn.Module):
         ## Passing though dense layer
         ## Shape is changed to
         ## [batch_size, output_sequence_size]
-        result = self.output_dense_layer(flatten)
-
+        result = self.output_dense_layer(flatten).unsqueeze(-1)
         return result
 
     def learn(
@@ -1836,6 +1863,8 @@ class WaterFormer(nn.Module):
         # Iterate through dataloaders
         batch_cnt = 0
         for (src, tgt, tgt_y) in dataloader:
+            src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
+
             # zero the parameter gradients
             self.zero_grad(set_to_none=True)
 
@@ -1988,8 +2017,9 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         """
         super().__init__(*args, **kwargs)
         self.tgt_y = tgt.copy()
-        self.feature_length = src.shape[1]
-        self.knowledge_length = int(input_sequence_size / self.feature_length)
+        self.src_feature_length = src.shape[1]
+        self.tgt_feature_length = tgt.shape[1]
+        self.knowledge_length = int(input_sequence_size / self.src_feature_length)
         # Calculate sequence length
         self.input_sequence_size = input_sequence_size
         self.output_sequence_size = output_sequence_size # Forecast length
@@ -2003,14 +2033,18 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         self._length = src.shape[0] - (self.input_sequence_size / src.shape[1]) - output_sequence_size
         if self._length <= 0:
             raise NotEnoughData
+        else:
+            cprint(f"The length of the dataset is {self._length}", "green")
         
         # Starting formatting data
-        cprint("Convert timestamp", "green")
+        cprint("Convert timestamp", "cyan")
         self.timestamp = self._convert_timestamp(timestamp)
-        cprint("Combine timestamp with source", "green")
+        cprint("Combine timestamp with source", "cyan")
         self.src = self._forge_timestamp_with_data(src, self.timestamp)
-        cprint("Combine timestamp with target", "green")
+        cprint(f"source: {self.src.shape}", "green")
+        cprint("Combine timestamp with target", "cyan")
         self.tgt = self._forge_timestamp_with_data(tgt, self.timestamp)
+        cprint(f"target: {self.tgt.shape}", "green")
         cprint("Finish initialize", "green")
 
         # Note the spatiotemporal_encoding_size
@@ -2022,7 +2056,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         Returns:
             int: Amount of elements in the dataset
         """
-        return self._length
+        return int(self._length)
     
     def __getitem__(self, index: int) -> Tuple[torch.tensor, torch.tensor, torch.tensor]:
         """Get the *index* item in the dataset, the dataset is using sliding windows
@@ -2033,9 +2067,10 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         Returns:
             Tuple[torch.tensor, torch.tensor, torch.tensor]: src, tgt, tgt_y in sequence
         """
-        _index *= self.feature_length
-        src = torch.tensor(self.src[_index: _index + self.input_sequence_size], device=self.device)
-        tgt = torch.tensor(self.tgt[_index: _index + self.input_sequence_size], device=self.device)
+        src_offset_index = index * self.src_feature_length
+        tgt_offset_index = index * self.tgt_feature_length
+        src = torch.tensor(self.src[src_offset_index: src_offset_index + self.input_sequence_size], device=self.device)
+        tgt = torch.tensor(self.tgt[tgt_offset_index: tgt_offset_index + self.input_sequence_size], device=self.device)
         tgt_y = torch.tensor(self.tgt_y[index + self.knowledge_length: index + self.knowledge_length + self.output_sequence_size], device=self.device)
         return src, tgt, tgt_y
     
@@ -2180,7 +2215,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             [<cos>]
         ]
         """
-        data = data.stack([data, isValid, sin_positional_variable, cos_positional_variable], axis=0)
+        data = np.stack([data, isValid, sin_positional_variable, cos_positional_variable], axis=0)
         """
         [
             [data, sin_positional_variable, cos_positional_variable],
