@@ -997,37 +997,6 @@ class TransformerForecasterVisualLogger:
         self.tlcp.append(loss)
         return
 
-
-class TransformerClassifierVisualLogger(TransformerForecasterVisualLogger):
-    def __init__(self, 
-                 name: str, 
-                 working_dir: str, 
-                 meta_data: dict = {}, 
-                 runtime_plotting: bool = True, 
-                 which_to_plot: list | None = None,
-                 in_one_figure: bool = False,
-                 plot_interval: int = 1,
-                 format: str = "png",
-                 ) -> None:
-        super().__init__(name, 
-                         working_dir, 
-                         meta_data, 
-                         runtime_plotting, 
-                         which_to_plot,
-                         in_one_figure,
-                         plot_interval,
-                         format=format,
-                         )
-        self.tfp = TransformerClassifierPlotter(
-            name,
-            working_dir,
-            meta_data=meta_data,
-            runtime_plotting=runtime_plotting,
-            which_to_plot=which_to_plot,
-            in_one_figure=in_one_figure,
-            plot_interval=plot_interval,
-            format=format
-        )
 """
 
 ███╗   ███╗ ██████╗ ██████╗ ███████╗██╗     
@@ -1479,12 +1448,14 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         """
         super().__init__(*args, **kwargs)
         self.tgt_y = tgt.copy()
-        self.src_feature_length = src.shape[1]
+        self.src_feature_length = src.shape[1] # Step size when doing __getitem__
+        cprint(f"Source number of features: {self.src_feature_length}", color="green")
         self.tgt_feature_length = tgt.shape[1]
+        cprint(f"Target number of features: {self.tgt_feature_length}", color="green")
         self.knowledge_length = int(input_sequence_size / self.src_feature_length)
         # Calculate sequence length
         self.input_sequence_size = input_sequence_size
-        print(f"input sequence size: {input_sequence_size}")
+        cprint(f"input sequence size: {input_sequence_size}", "green")
         self.output_sequence_size = output_sequence_size # Forecast length
         self.device = device
 
@@ -1504,11 +1475,11 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         self.timestamp = self._convert_timestamp(timestamp)
         cprint("Combine timestamp with source", "cyan")
         self.src = self._forge_timestamp_with_data(src, self.timestamp)
-        cprint(f"source: {self.src.shape}", "green")
+        cprint(f"Source shape: {self.src.shape}", "green")
         cprint("Combine timestamp with target", "cyan")
         self.tgt = self._forge_timestamp_with_data(tgt, self.timestamp)
-        cprint(f"target: {self.tgt.shape}", "green")
-        cprint("Finish initialize", "green")
+        cprint(f"Target shape: {self.tgt.shape}", "green")
+        cprint("Finish initialize\n", "green")
 
         # Note the spatiotemporal_encoding_size
         self.spatiotemporal_encoding_size = self.src.shape[1]
@@ -1542,7 +1513,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         """Convert absolute timestamp to sinusoid timestamp
 
         The default behaviors are convert the input timestamp to sinusoid, cos representation with 
-        hour, day, week, month,and year as period.
+        hour, day, week, month,and year as period. In total it should generate 10 new dimension
 
         Args:
             timestamp (Union[list, np.array]): The list of timestamp will be convert to np.array
@@ -1555,48 +1526,47 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         if isinstance(timestamp, list):
             timestamp: np.array = np.array(timestamp, type=np.timedelta64)
         
-        timestamp = (timestamp - timestamp.astype('datetime64[m]')) / np.timedelta64(1, 'm')
+        int_timestamp = timestamp.copy().astype('datetime64[m]').astype(np.int64)
         
         # Hour
         hour_length = 60
-        sin_hours = np.sin(2 * np.pi * timestamp / hour_length)
-        cos_hours = np.cos(2 * np.pi * timestamp / hour_length)
-
+        sin_hours = np.sin(2 * np.pi * int_timestamp / hour_length)
+        cos_hours = np.cos(2 * np.pi * int_timestamp / hour_length)
         # Day
         day_length = 60 * 24
-        sin_days = np.sin(2 * np.pi * timestamp / day_length)
-        cos_days = np.cos(2 * np.pi * timestamp / day_length)
+        sin_days = np.sin(2 * np.pi * int_timestamp / day_length)
+        cos_days = np.cos(2 * np.pi * int_timestamp / day_length)
 
         # Week
         week_length = 60 * 24 * 7
-        sin_weeks = np.sin(2 * np.pi * timestamp / week_length)
-        cos_weeks = np.cos(2 * np.pi * timestamp / week_length)
+        sin_weeks = np.sin(2 * np.pi * int_timestamp / week_length)
+        cos_weeks = np.cos(2 * np.pi * int_timestamp / week_length)
+
+        # Year
+        year_length = 60 * 24 * 365
+        sin_years = np.sin(2 * np.pi * int_timestamp / year_length)
+        cos_years = np.cos(2 * np.pi * int_timestamp / year_length)
 
         # Month
-        sin_months = timestamp.copy()
-        cos_months = timestamp.copy()
+        sin_months = int_timestamp.copy()
+        cos_months = int_timestamp.copy()
         # Extract the month information using NumPy functions
         months = timestamp.astype('datetime64[M]').astype(int) % 12 + 1
         # Get an array of boolean values where True represents months with 31 days
         big_month_length = 60 * 24 * 31
         is_31_days_month = np.isin(months, [1, 3, 5, 7, 8, 10, 12])
-        sin_months[is_31_days_month] = np.sin(2 * np.pi * timestamp[is_31_days_month] / big_month_length)
-        cos_months[is_31_days_month] = np.cos(2 * np.pi * timestamp[is_31_days_month] / big_month_length)
+        sin_months[is_31_days_month] = np.sin(2 * np.pi * int_timestamp[is_31_days_month] / big_month_length)
+        cos_months[is_31_days_month] = np.cos(2 * np.pi * int_timestamp[is_31_days_month] / big_month_length)
         # Get an array of boolean values where True represents months with 30 days
         small_month_length = 60 * 24 * 30
         is_30_days_month = np.isin(months, [4, 6, 9, 11])
-        sin_months[is_30_days_month] = np.sin(2 * np.pi * timestamp[is_30_days_month] / small_month_length)
-        cos_months[is_30_days_month] = np.cos(2 * np.pi * timestamp[is_30_days_month] / small_month_length)
+        sin_months[is_30_days_month] = np.sin(2 * np.pi * int_timestamp[is_30_days_month] / small_month_length)
+        cos_months[is_30_days_month] = np.cos(2 * np.pi * int_timestamp[is_30_days_month] / small_month_length)
         # Get an array of boolean values where True represents months being Feb
         tiny_month_length = 60 * 24 * 28
         is_feb = np.isin(months, [2])
-        sin_months[is_feb] = np.sin(2 * np.pi * timestamp[is_feb] / tiny_month_length)
-        cos_months[is_feb] = np.cos(2 * np.pi * timestamp[is_feb] / tiny_month_length)
-
-        # Year
-        year_length = 60 * 24 * 365
-        sin_years = np.sin(2 * np.pi * timestamp / year_length)
-        cos_years = np.cos(2 * np.pi * timestamp / year_length)
+        sin_months[is_feb] = np.sin(2 * np.pi * int_timestamp[is_feb] / tiny_month_length)
+        cos_months[is_feb] = np.cos(2 * np.pi * int_timestamp[is_feb] / tiny_month_length)
 
         sinusoid_timestamp = np.stack(
             [sin_hours, cos_hours, sin_days, cos_days, sin_weeks, cos_weeks, sin_months, cos_months, sin_years, cos_years], 
@@ -1639,13 +1609,13 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         """
         data: np.array = data.reshape((-1))
 
-        # Create isValid array
+        # Create isValid array, adding 1 dimension
         ## The rational for this is that the model will know the value should not be used.
         nan_filter = np.isnan(data)
         isValid = np.ones(shape=(data.shape[0]))
         isValid[nan_filter] = 0
 
-        # Create positional variables
+        # Create positional variables, adding 2 dimensions
         """
         [
             sin_0, sin_1, sin_2, ..., sin_n, sin_0, ...
@@ -1656,7 +1626,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         sin_positional_variable = np.tile(sin_positional_variable, record_cnt)
         cos_positional_variable = np.tile(cos_positional_variable, record_cnt)
 
-        # Duplicate timestamp
+        # Duplicate timestamp, adding no dimension
         """
         [
             [0],
