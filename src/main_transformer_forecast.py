@@ -93,6 +93,7 @@ HYPERPARAMETER = {
     "knowledge_length":             32,     # 4 hours
     "forecast_length":              2,      # 1 hour
     "input_sequence_size":          None,   # Generated on the fly
+    "output_sequence_size":         None,   # Generated on the fly
     "spatiotemporal_encoding_size": None,   # Generated on the fly
     "batch_size":                   32,    # 32 is pretty small
     "train_val_split_ratio":        0.8,
@@ -172,10 +173,11 @@ def main() -> None:
             tgt,
             timestamp,
             HYPERPARAMETER["knowledge_length"] * src.shape[1],
-            HYPERPARAMETER["forecast_length"],
+            HYPERPARAMETER["forecast_length"] * tgt.shape[1],
             device=DEVICE,
         )
         HYPERPARAMETER["input_sequence_size"] = dataset.input_sequence_size
+        HYPERPARAMETER["output_sequence_size"] = dataset.output_sequence_size
         HYPERPARAMETER["spatiotemporal_encoding_size"] = dataset.spatiotemporal_encoding_size
 
         loader = torch.utils.data.DataLoader(
@@ -192,7 +194,7 @@ def main() -> None:
     # Model
     model: WaterFormer = WaterFormer(
         HYPERPARAMETER["input_sequence_size"],
-        HYPERPARAMETER["forecast_length"],
+        HYPERPARAMETER["output_sequence_size"],
         HYPERPARAMETER["spatiotemporal_encoding_size"],
         device=DEVICE
     ).to(DEVICE)

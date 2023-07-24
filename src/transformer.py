@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import math
 import json
@@ -445,10 +447,11 @@ class TransformerTruthAndGuess:
     def append(self, truth: torch.tensor, guess: torch.tensor) -> None:
         """
         Add one batch worth of data to the object
+        The input is expected to be batch first
         """
         # Metadata
-        batch_size = truth.shape[1]
-        forecast_length = truth.shape[0]
+        batch_size = truth.shape[0]
+        forecast_length = truth.shape[1]
         
         # Not necessary if only use cpu
         truth = truth.detach().clone().cpu().tolist()
@@ -460,9 +463,9 @@ class TransformerTruthAndGuess:
         
         # Organize data
         for i in range(batch_size):
-            self._ground_truth.append(truth[0][i][0])
+            self._ground_truth.append(truth[i][0][0])
             for j in range(forecast_length):
-                self._forecast_guess[j].append(guess[j][i][0])
+                self._forecast_guess[j].append(guess[i][j][0])
 
         # Dropping last data
         ## Ground truth is shorter than the forecast_guess
@@ -972,7 +975,7 @@ class TransformerForecasterVisualLogger:
         self.tlcp.signal_new_epoch()
         return
 
-    def signal_new_dataloader(self) -> None:
+    def segment(self) -> None:
         self.tfp.signal_new_dataloader()
         self.tlcp.signal_new_dataloader()
         return
@@ -1163,7 +1166,7 @@ class WaterFormer(nn.Module):
         )
 
         # Output dense layer
-        layer_size_after_flatten = spatiotemporal_encoding_size * input_sequence_size
+        layer_size_after_flatten = spatiotemporal_encoding_size * output_sequence_size
         self.output_dense_layer = nn.Linear(
             in_features=layer_size_after_flatten,
             out_features=output_sequence_size,
@@ -1245,8 +1248,7 @@ class WaterFormer(nn.Module):
         total_loss = 0
         
         # Iterate through dataloaders
-        batch_cnt = 0
-        for (src, tgt, tgt_y) in dataloader:
+        for batch_cnt, (src, tgt, tgt_y) in enumerate(dataloader):
             src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
 
             # zero the parameter gradients
@@ -1269,17 +1271,18 @@ class WaterFormer(nn.Module):
             # CPU
             dataloader_loss = loss.item()
             total_loss += dataloader_loss
-            
+
             # Add data to val_logger
             if visual_logger != None:
                 visual_logger.append_to_forecast_plotter(tgt_y, prediction)
                 visual_logger.append_to_loss_console_plotter(dataloader_loss)
+                if batch_cnt % 50 == 0:
+                    visual_logger.tlcp.signal_new_dataloader()
+                if batch_cnt % 200 == 0:
+                    visual_logger.tfp.signal_new_dataloader()
 
             bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(batch_cnt+1)):.3f}", refresh=True)
-            batch_cnt += 1
             bar.update()
-        if visual_logger != None:
-            visual_logger.signal_new_dataloader()
         if profiler != None:
             profiler.step()
         bar.colour = BLACK
@@ -1339,7 +1342,7 @@ class WaterFormer(nn.Module):
                     profiler.step()
 
         if visual_logger != None:
-            visual_logger.signal_new_dataloader()
+            visual_logger.segment()
         bar.colour = BLACK
         bar.close()
         test_loss /= total_batch
@@ -1404,8 +1407,8 @@ def transformer_collate_fn(data):
 class WaterFormerDataset(torch.utils.data.Dataset):
     def __init__(
             self, 
-            src: np.array,
-            tgt: np.array,
+            src: np.ndarray,
+            tgt: np.ndarray,
             timestamp: Union[list, np.array],
             input_sequence_size: int,
             output_sequence_size: int,
@@ -1453,10 +1456,11 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         self.tgt_feature_length = tgt.shape[1]
         cprint(f"Target number of features: {self.tgt_feature_length}", color="green")
         self.knowledge_length = int(input_sequence_size / self.src_feature_length)
+        self.forecast_length = int(output_sequence_size / self.tgt_feature_length)
         # Calculate sequence length
         self.input_sequence_size = input_sequence_size
         cprint(f"input sequence size: {input_sequence_size}", "green")
-        self.output_sequence_size = output_sequence_size # Forecast length
+        self.output_sequence_size = output_sequence_size
         self.device = device
 
         # Check if the input sequence size can be segmented in chunk
@@ -1464,7 +1468,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             cprint("Cannot divide the input sequence into full chunk", "red")
             raise Exception
         
-        self._length = src.shape[0] - self.knowledge_length - output_sequence_size - 1
+        self._length = src.shape[0] - self.knowledge_length - self.forecast_length - 1
         if self._length <= 0:
             raise NotEnoughData
         else:
@@ -1504,8 +1508,8 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         src_offset_index = index * self.src_feature_length
         tgt_offset_index = index * self.tgt_feature_length
         src = torch.tensor(self.src[src_offset_index: src_offset_index + self.input_sequence_size], device=self.device)
-        tgt = torch.tensor(self.tgt[tgt_offset_index: tgt_offset_index + self.input_sequence_size], device=self.device)
-        tgt_y = torch.tensor(self.tgt_y[index + self.knowledge_length: index + self.knowledge_length + self.output_sequence_size], device=self.device)
+        tgt = torch.tensor(self.tgt[tgt_offset_index: tgt_offset_index + self.output_sequence_size], device=self.device)
+        tgt_y = torch.tensor(self.tgt_y[index + self.knowledge_length: index + self.knowledge_length + self.forecast_length], device=self.device)
         return src, tgt, tgt_y
     
     @staticmethod
@@ -1548,8 +1552,8 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         cos_years = np.cos(2 * np.pi * int_timestamp / year_length)
 
         # Month
-        sin_months = int_timestamp.copy()
-        cos_months = int_timestamp.copy()
+        sin_months = np.zeros(shape=int_timestamp.shape, dtype=np.float32)
+        cos_months = np.zeros(shape=int_timestamp.shape, dtype=np.float32)
         # Extract the month information using NumPy functions
         months = timestamp.astype('datetime64[M]').astype(int) % 12 + 1
         # Get an array of boolean values where True represents months with 31 days
@@ -1567,6 +1571,13 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         is_feb = np.isin(months, [2])
         sin_months[is_feb] = np.sin(2 * np.pi * int_timestamp[is_feb] / tiny_month_length)
         cos_months[is_feb] = np.cos(2 * np.pi * int_timestamp[is_feb] / tiny_month_length)
+
+        cprint("Example timestamp encoding:", "green")
+        print(f"Hour:\n{sin_hours[:10]}\n{cos_hours[:10]}")
+        print(f"Day:\n{sin_days[:10]}\n{cos_days[:10]}")
+        print(f"Week:\n{sin_weeks[:10]}\n{cos_weeks[:10]}")
+        print(f"Month:\n{sin_months[:10]}\n{cos_months[:10]}")
+        print(f"Year:\n{sin_years[:10]}\n{cos_years[:10]}")
 
         sinusoid_timestamp = np.stack(
             [sin_hours, cos_hours, sin_days, cos_days, sin_weeks, cos_weeks, sin_months, cos_months, sin_years, cos_years], 
@@ -1614,6 +1625,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         nan_filter = np.isnan(data)
         isValid = np.ones(shape=(data.shape[0]))
         isValid[nan_filter] = 0
+        data[nan_filter] = -100
 
         # Create positional variables, adding 2 dimensions
         """
