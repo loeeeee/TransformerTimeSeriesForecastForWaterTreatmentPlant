@@ -263,11 +263,16 @@ def main() -> None:
             x = data[column].to_numpy(na_value=np.nan).reshape(-1, 1)
             data[column] = transformer.fit_transform(x)
             if column in name_mapping:
+                # Convert the raw national standards to the scaled ones
                 national_standards[name_mapping[column]] = transformer.transform(
                     np.array(
                     national_standards[name_mapping[column]]
                     ).reshape(1, 1)
                     )[0, 0]
+        for column in Y_COLUMNS:
+            transformer = GaussRankScaler()
+            y = data[column].to_numpy(na_value=np.nan).reshape(-1, 1)
+            data[column] = transformer.fit_transform(y)
 
         return data, national_standards
     

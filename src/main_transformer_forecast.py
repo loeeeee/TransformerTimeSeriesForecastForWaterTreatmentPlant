@@ -226,7 +226,7 @@ def main() -> None:
         WORKING_DIR,
         runtime_plotting = True,
         plot_interval = 10,
-        format="svg",
+        format="png",
     )
     val_logger = TransformerForecasterVisualLogger(
         "val",
@@ -234,7 +234,7 @@ def main() -> None:
         runtime_plotting = True,
         in_one_figure = False,
         plot_interval = 3,
-        format="svg",
+        format="png",
     )
     print(colored("Training:", "black", "on_green"), "\n")
     

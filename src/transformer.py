@@ -1248,8 +1248,8 @@ class WaterFormer(nn.Module):
         total_loss = 0
         
         # Iterate through dataloaders
-        for batch_cnt, (src, tgt, tgt_y) in enumerate(dataloader):
-            src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
+        for batch_cnt, (src, tgt, tgt_y) in enumerate(dataloader, start=1):
+            # src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
 
             # zero the parameter gradients
             self.zero_grad(set_to_none=True)
@@ -1269,17 +1269,15 @@ class WaterFormer(nn.Module):
             optimizer.step()
 
             # CPU
-            dataloader_loss = loss.item()
-            total_loss += dataloader_loss
+            batch_loss = loss.item()
+            total_loss += batch_loss
 
             # Add data to val_logger
             if visual_logger != None:
                 visual_logger.append_to_forecast_plotter(tgt_y, prediction)
-                visual_logger.append_to_loss_console_plotter(dataloader_loss)
+                visual_logger.append_to_loss_console_plotter(batch_loss)
                 if batch_cnt % 50 == 0:
-                    visual_logger.tlcp.signal_new_dataloader()
-                if batch_cnt % 200 == 0:
-                    visual_logger.tfp.signal_new_dataloader()
+                    visual_logger.segment()
 
             bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(batch_cnt+1)):.3f}", refresh=True)
             bar.update()
@@ -1315,34 +1313,33 @@ class WaterFormer(nn.Module):
             position    = 1,
             colour      = GREEN,
             )
-        batch_cnt = 0
         with torch.no_grad():
-            for (src, tgt, tgt_y) in dataloader:
-                src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
+            for batch_cnt, (src, tgt, tgt_y) in enumerate(dataloader, start=1):
+                # src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
 
                 with torch.autocast(device_type=self.device):
-                    pred = self(src, tgt)
-                    loss = loss_fn(pred, tgt_y)
+                    prediction = self(src, tgt)
+                    loss = loss_fn(prediction, tgt_y)
                     for additional_monitor in metrics:
-                        additional_loss[str(type(additional_monitor))] += additional_monitor(pred, tgt_y).item()
+                        additional_loss[str(type(additional_monitor))] += additional_monitor(prediction, tgt_y).item()
 
                 # CPU part
-                loss_item = loss.item()
-                test_loss += loss_item
-                correct += (pred == tgt_y).type(torch.float).sum().item()
+                batch_loss = loss.item()
+                test_loss += batch_loss
+                correct += (prediction == tgt_y).type(torch.float).sum().item()
 
+                # Add data to val_logger
                 if visual_logger != None:
-                    visual_logger.append_to_forecast_plotter(tgt_y, pred)
-                    visual_logger.append_to_loss_console_plotter(loss_item)
+                    visual_logger.append_to_forecast_plotter(tgt_y, prediction)
+                    visual_logger.append_to_loss_console_plotter(batch_loss)
+                    if batch_cnt % 50 == 0:
+                        visual_logger.segment()
 
                 bar.update()
                 bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)
-                batch_cnt += 1
                 if profiler != None:
                     profiler.step()
 
-        if visual_logger != None:
-            visual_logger.segment()
         bar.colour = BLACK
         bar.close()
         test_loss /= total_batch
