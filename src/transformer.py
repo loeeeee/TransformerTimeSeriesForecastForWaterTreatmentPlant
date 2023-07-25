@@ -161,7 +161,7 @@ def run_encoder_decoder_inference(
 
     return final_prediction
 
-def generate_square_subsequent_mask(dim1: int, dim2: int) -> torch.Tensor:
+def generate_square_subsequent_mask(dim1: int, dim2: int, device: str="cpu") -> torch.Tensor:
     """
     Generates an upper-triangular matrix of -inf, with zeros on diag.
     Modified from: 
@@ -181,7 +181,8 @@ def generate_square_subsequent_mask(dim1: int, dim2: int) -> torch.Tensor:
 
         A Tensor of shape [dim1, dim2]
     """
-    return torch.triu(torch.ones(dim1, dim2) * float('-inf'), diagonal=1)
+    result = torch.triu(torch.ones(dim1, dim2) * float('-inf'), diagonal=1).to(device=device, dtype=torch.float32)
+    return result
 """
 
 ██╗   ██╗██╗███████╗██╗   ██╗ █████╗ ██╗     ██╗███████╗███████╗██████╗ 
@@ -1080,8 +1081,8 @@ class WaterFormer(nn.Module):
             word_embedding_size: int = 512,
             encoder_layer_cnt: int = 8,
             decoder_layer_cnt: int = 8,
-            encoder_layer_head_cnt: int = 7,
-            decoder_layer_head_cnt: int = 7,
+            encoder_layer_head_cnt: int = 8,
+            decoder_layer_head_cnt: int = 8,
             average_last_n_decoder_output: int = 4,
             device: str = "cpu",
             **kwargs,
@@ -1166,22 +1167,21 @@ class WaterFormer(nn.Module):
             ) for i in range(decoder_layer_cnt)
         ] 
 
-        # Flatten layer
-        ## It flattens non-batch layer
-        self.flatten_layer = nn.Flatten(
-            start_dim=1,
-            end_dim=-1,
-        )
-
         # Output dense layer
-        layer_size_after_flatten = word_embedding_size * dict_size
+        # layer_size_after_flatten = word_embedding_size * dict_size
         self.output_dense_layer = nn.Linear(
-            in_features=layer_size_after_flatten,
+            in_features=word_embedding_size,
             out_features=dict_size,
         )
 
     
-    def forward(self, src: torch.tensor, tgt: torch.tensor) -> torch.tensor:
+    def forward(
+            self, 
+            src: torch.tensor, 
+            tgt: torch.tensor, 
+            src_mask: Union[torch.tensor, None] = None, 
+            tgt_mask: Union[torch.tensor, None] = None
+            ) -> torch.tensor:
         """Informer style forward
         
         This model will always use batch first tensor format.
@@ -1208,7 +1208,9 @@ class WaterFormer(nn.Module):
         context = self.encoder_positional_encoding(src)
         ## Passing though the encoder, tensor shape would not change
         ## [batch_size, input_sequence_size, word_embedding_size]
-        context = self.encoder(context)
+        context = self.encoder(
+            context,
+            )
 
         # Decoder side
         ## Passing though the positional encoding, tensor shape would not change
@@ -1218,11 +1220,21 @@ class WaterFormer(nn.Module):
         ## Passing though the decoder, tensor shape would not change
         ## [batch_size, input_sequence_size, word_embedding_size]
         for decoder_layer in self.decoder_layers[:self.average_last_n_decoder_output]:
-            target = decoder_layer(target, context)
+            target = decoder_layer(
+                target, 
+                context,
+                memory_mask=src_mask,
+                tgt_mask=tgt_mask,
+                )
 
         average_bucket = []
         for decoder_layer in self.decoder_layers[self.average_last_n_decoder_output:]:
-            target = decoder_layer(target, context)
+            target = decoder_layer(
+                target, 
+                context,
+                memory_mask=src_mask,
+                tgt_mask=tgt_mask,
+                )
             average_bucket.append(target)
         
         ## Passing though the average layer
@@ -1231,16 +1243,10 @@ class WaterFormer(nn.Module):
         average = torch.stack(average_bucket, dim=0).mean(dim=0)
         
         # Output
-        ## Passing though flatten layer
-        ## Change from
-        ## [batch_size, input_sequence_size, word_embedding_size]
-        ## To 
-        ## [batch_size, word_embedding_size * input_sequence_size]
-        flatten = self.flatten_layer(average)
         ## Passing though dense layer
         ## Shape is changed to
         ## [batch_size, output_sequence_size]
-        result = self.output_dense_layer(flatten).unsqueeze(-1)
+        result = self.output_dense_layer(average)
         return result
 
     def learn(
@@ -1263,18 +1269,24 @@ class WaterFormer(nn.Module):
             colour      = GREEN,
             )
         total_loss = 0
-        
+
         # Iterate through dataloaders
         for batch_cnt, (src, tgt, tgt_y) in enumerate(dataloader, start=1):
-            # src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
-
             # zero the parameter gradients
             self.zero_grad(set_to_none=True)
 
             # Forward
             with torch.autocast(device_type=self.device):
+                src_mask = generate_square_subsequent_mask(
+                    dim1=tgt.size(1),
+                    dim2=src.size(1),
+                ).to(device=self.device)
+                tgt_mask = generate_square_subsequent_mask(
+                    dim1=tgt.shape[1],
+                    dim2=tgt.shape[1]
+                ).to(device=self.device)
                 # Make forecasts
-                prediction = self(src, tgt)
+                prediction = self(src, tgt, src_mask, tgt_mask)
                 # Compute and backprop loss
                 loss = loss_fn(prediction, tgt_y)
 
@@ -1425,7 +1437,8 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             tgt: np.ndarray,
             timestamp: Union[list, np.array],
             maximum_knowledge_length: int,
-            output_sequence_size: int,
+            forecast_length: int,
+            dict_size: int,
             *args, 
             device: str = "cpu",
             **kwargs
@@ -1469,15 +1482,14 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         self.tgt_feature_length = tgt.shape[1]
         cprint(f"Target number of features: {self.tgt_feature_length}", color="green")
         self.knowledge_length = maximum_knowledge_length
-        self.forecast_length = int(output_sequence_size / self.tgt_feature_length)
-        
+
         # Calculate sequence length
         self.max_input_sequence_size = maximum_knowledge_length * self.src_feature_length
         cprint(f"input sequence size: {maximum_knowledge_length}", "green")
-        self.output_sequence_size = output_sequence_size
+        self.dict_size = dict_size
         self.device = device
         
-        self._length = src.shape[0] - self.knowledge_length - self.forecast_length - 1
+        self._length = src.shape[0] - self.knowledge_length
         if self._length <= 0:
             raise NotEnoughData
         else:
@@ -1492,7 +1504,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         cprint("Combine timestamp with target", "cyan")
         self.tgt = self._forge_timestamp_with_data(tgt, self.timestamp)
         cprint(f"Target shape: {self.tgt.shape}", "green")
-        self.tgt_y = np.expand_dims(self.tgt[:, 0].copy(), axis=1)
+        self.tgt_y = self.tgt[:, 0].copy().astype(np.int32)
         cprint(f"Target Y shape: {self.tgt_y.shape}", "green")
         cprint("Finish initialize\n", "green")
 
@@ -1518,10 +1530,11 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         """
         index += 1
         src_offset_index = index * self.src_feature_length + self.max_input_sequence_size
-        tgt_offset_index = index * self.tgt_feature_length + self.output_sequence_size
+        tgt_offset_index = index * self.tgt_feature_length + self.knowledge_length
         src = torch.tensor(self.src[src_offset_index - self.max_input_sequence_size: src_offset_index], device=self.device)
-        tgt = torch.tensor(self.tgt[tgt_offset_index - self.output_sequence_size: tgt_offset_index], device=self.device)
-        tgt_y = torch.tensor(self.tgt_y[tgt_offset_index: tgt_offset_index + self.output_sequence_size], device=self.device)
+        tgt = torch.tensor(self.tgt[tgt_offset_index - self.knowledge_length: tgt_offset_index], device=self.device)
+        tgt_y = torch.tensor(self.tgt_y[tgt_offset_index - self.knowledge_length + 1: tgt_offset_index + 1], device=self.device).type(torch.LongTensor)
+        tgt_y = torch.nn.functional.one_hot(tgt_y, num_classes=self.dict_size)
         return src, tgt, tgt_y
     
     @staticmethod

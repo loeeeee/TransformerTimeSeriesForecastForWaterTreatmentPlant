@@ -68,12 +68,7 @@ RAW_COLUMNS = [
 X_COLUMNS = RAW_COLUMNS[:-4]
 Y_COLUMNS = RAW_COLUMNS[-4:]
 
-TGT_COLUMNS = RAW_COLUMNS[-4]
-
-def generate_one_hot_label(label_min: int, label_max: int) -> list:
-    return [f"{TGT_COLUMNS} {i}" for i in range(label_min, label_max)]
-
-HOT_TGT_COLUMNS = generate_one_hot_label(0, 101)
+TGT_COLUMNS = "line 1 pump speed discrete"
 
 # Read scaling factors
 def load_scaled_national_standards() -> dict:
@@ -93,24 +88,33 @@ def load_scaled_national_standards() -> dict:
         data = json.load(f)
     return data
 
+# Read pump dictionary
+def load_pump_dictionary() -> dict:
+    dictionary_path = os.path.join(
+        DATA_DIR, "pump_dictionary.json"
+        )
+    with open(dictionary_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data
+
 # HYPERPARAMETER
 HYPERPARAMETER = {
     "knowledge_length":             32,     # 4 hours
     "forecast_length":              2,      # 1 hour
-    "dict_size":                    100,
     "max_input_sequence_size":      None,   # Generated on the fly
     "spatiotemporal_encoding_size": None,   # Generated on the fly
     "batch_size":                   32,    # 32 is pretty small
     "train_val_split_ratio":        0.8,
     "scaled_national_standards":    load_scaled_national_standards(),
+    "pump_dictionary":              load_pump_dictionary(),
     "src_columns":                  X_COLUMNS,
-    "tgt_columns":                  HOT_TGT_COLUMNS,
-    "tgt_y_columns":                HOT_TGT_COLUMNS,
+    "tgt_columns":                  TGT_COLUMNS,
+    "tgt_y_columns":                TGT_COLUMNS,
     "random_seed":                  42,
 }
 
 INPUT_FEATURE_SIZE = len(HYPERPARAMETER["src_columns"])
-FORECAST_FEATURE_SIZE = len(HOT_TGT_COLUMNS)
+FORECAST_FEATURE_SIZE = len(TGT_COLUMNS)
 
 cprint(f"Source columns: {HYPERPARAMETER['src_columns']}", "green")
 cprint(f"Target columns: {HYPERPARAMETER['tgt_columns']}", "green")
@@ -170,8 +174,8 @@ def main() -> None:
         
         # Split data
         src = np.array(data[HYPERPARAMETER["src_columns"]].values)
-        tgt = np.array(data[HYPERPARAMETER["tgt_columns"]].values)
-        print(tgt.shape)
+        tgt = np.array(data[HYPERPARAMETER["tgt_columns"]].values).reshape((-1, 1))
+
         timestamp = data.reset_index(names="timestamp")["timestamp"].to_numpy(dtype=np.datetime64)
         
         dataset = WaterFormerDataset(
@@ -180,6 +184,7 @@ def main() -> None:
             timestamp,
             HYPERPARAMETER["knowledge_length"],
             HYPERPARAMETER["forecast_length"],
+            HYPERPARAMETER["pump_dictionary"]["dict_size"],
             device=DEVICE,
         )
         HYPERPARAMETER["spatiotemporal_encoding_size"] = dataset.spatiotemporal_encoding_size
@@ -197,7 +202,7 @@ def main() -> None:
     
     # Model
     model: WaterFormer = WaterFormer(
-        HYPERPARAMETER["dict_size"],
+        HYPERPARAMETER["pump_dictionary"]["dict_size"],
         HYPERPARAMETER["spatiotemporal_encoding_size"],
         device=DEVICE
     ).to(DEVICE)

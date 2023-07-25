@@ -296,24 +296,17 @@ def main() -> None:
         """
         Create one hot label for the data
         """
-        """
-        rounded_tgt_column_name = f"{TGT_COLUMNS} rounded"
-        # Destructive procedure for data
-        data[rounded_tgt_column_name] = data[TGT_COLUMNS].copy()
-        data[rounded_tgt_column_name] *= 2 * (10 ** decimal_accuracy) # Make the pump speed first go from 0 to 100 and then scale it
-        data[rounded_tgt_column_name] = data[rounded_tgt_column_name].round().astype(np.uint32)
-        """
-
         unique_values = data[TGT_COLUMNS].unique()
         unique_values = np.sort(unique_values)
+        cprint(f"Unique value:", "green")
+        print(unique_values)
         pump_speed_upper_bound = unique_values[-1] # Upper bound will always be 100%, it is probably 50
         pump_speed_lower_bound = unique_values[0] # Lower bound is probably 0
-        # step_size = (unique_values[-2] - unique_values[1]) / (dict_size -2)
 
         word_dictionary = {
-            "stop": pump_speed_lower_bound,
-            "full": pump_speed_upper_bound,
-            "start": unique_values[1],
+            "overload": pump_speed_upper_bound,
+            "start": pump_speed_lower_bound,
+            "full": unique_values[-1],
             "dict_size": dict_size,
         }
         discrete_tgt_column = f"{TGT_COLUMNS} discrete"
@@ -323,13 +316,12 @@ def main() -> None:
                 return True
             else:
                 return False
-        possible_words = np.linspace(unique_values[1], unique_values[-2] + 0.000001, num=dict_size - 2)
-        for word, (lower, upper) in enumerate(zip(possible_words[:-1], possible_words[1:]), start=2):
+        possible_words = np.linspace(unique_values[0], unique_values[-2] + 0.000001, num=dict_size - 1)
+        for word, (lower, upper) in enumerate(zip(possible_words[:-1], possible_words[1:]), start=1):
             mask = data[TGT_COLUMNS].apply(lambda x: _judge(x, lower, upper))
             data[discrete_tgt_column].iloc[mask] = word
         
-        data[discrete_tgt_column].iloc[data[TGT_COLUMNS] == pump_speed_upper_bound] = 1
-        data[discrete_tgt_column].iloc[data[TGT_COLUMNS] == pump_speed_lower_bound] = 0
+        data[discrete_tgt_column].iloc[data[TGT_COLUMNS] == pump_speed_upper_bound] = 0
 
         return data, word_dictionary
     
@@ -380,7 +372,7 @@ def main() -> None:
                   )
     
     # Store the dictionary
-    dictionary_path = os.path.join(DATA_DIR, "dictionary.json")
+    dictionary_path = os.path.join(DATA_DIR, "pump_dictionary.json")
     with open(dictionary_path, "w", encoding="utf-8") as f:
         json.dump(word_dictionary, f, indent=2)
 
