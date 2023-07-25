@@ -241,6 +241,21 @@ def main() -> None:
         # Mark record
         print(colored(f"Removing empty data from \n{X_COLUMNS}", "green"))
         data[X_COLUMNS] = data[X_COLUMNS].replace(0, np.nan)
+
+        ## Drop entirely empty and unusable data
+        mask = data.apply(lambda row: all(row.isin([0, np.nan])), axis=1)
+        data = data[~mask]
+
+        ## Drop wired data
+        mask = data[Y_COLUMNS].apply(lambda row: all(row.isin([0, np.nan])), axis=1)
+        data = data[~mask]
+
+        # Fill pump 1 with pump 2 data
+        data["line 1 pump speed"].iloc[(data["line 1 pump speed"] == 0) & (data["line 2 pump speed"] != 0)] = data["line 2 pump speed"].loc[(data["line 1 pump speed"] == 0) & (data["line 2 pump speed"] != 0)]
+
+        # Remove non sense pump speed
+        mask = data[["line 1 pump speed", "line 2 pump speed"]].apply(lambda row: all(row.isin([0, np.nan])), axis=1)
+        data = data[~mask]
         return data
     
     data = mark_unreasonable_data(data)
@@ -269,10 +284,6 @@ def main() -> None:
                     national_standards[name_mapping[column]]
                     ).reshape(1, 1)
                     )[0, 0]
-        for column in Y_COLUMNS:
-            transformer = GaussRankScaler()
-            y = data[column].to_numpy(na_value=np.nan).reshape(-1, 1)
-            data[column] = transformer.fit_transform(y)
 
         return data, national_standards
     
@@ -281,6 +292,49 @@ def main() -> None:
     _visual_data_distribution("dis_gauss", data)
     console_general_data_info(data)
 
+    def one_hot_label(data: pd.DataFrame, dict_size: int) -> pd.DataFrame:
+        """
+        Create one hot label for the data
+        """
+        """
+        rounded_tgt_column_name = f"{TGT_COLUMNS} rounded"
+        # Destructive procedure for data
+        data[rounded_tgt_column_name] = data[TGT_COLUMNS].copy()
+        data[rounded_tgt_column_name] *= 2 * (10 ** decimal_accuracy) # Make the pump speed first go from 0 to 100 and then scale it
+        data[rounded_tgt_column_name] = data[rounded_tgt_column_name].round().astype(np.uint32)
+        """
+
+        unique_values = data[TGT_COLUMNS].unique()
+        unique_values = np.sort(unique_values)
+        pump_speed_upper_bound = unique_values[-1] # Upper bound will always be 100%, it is probably 50
+        pump_speed_lower_bound = unique_values[0] # Lower bound is probably 0
+        # step_size = (unique_values[-2] - unique_values[1]) / (dict_size -2)
+
+        word_dictionary = {
+            "stop": pump_speed_lower_bound,
+            "full": pump_speed_upper_bound,
+            "start": unique_values[1],
+            "dict_size": dict_size,
+        }
+        discrete_tgt_column = f"{TGT_COLUMNS} discrete"
+        data[discrete_tgt_column] = np.nan
+        def _judge(x: float, start: float, stop: float) -> bool:
+            if x >= start and x < stop:
+                return True
+            else:
+                return False
+        possible_words = np.linspace(unique_values[1], unique_values[-2] + 0.000001, num=dict_size - 2)
+        for word, (lower, upper) in enumerate(zip(possible_words[:-1], possible_words[1:]), start=2):
+            mask = data[TGT_COLUMNS].apply(lambda x: _judge(x, lower, upper))
+            data[discrete_tgt_column].iloc[mask] = word
+        
+        data[discrete_tgt_column].iloc[data[TGT_COLUMNS] == pump_speed_upper_bound] = 1
+        data[discrete_tgt_column].iloc[data[TGT_COLUMNS] == pump_speed_lower_bound] = 0
+
+        return data
+    
+    data = one_hot_label(data, 100)
+    
     # Saving data
     cprint("Saving data.", color="black", on_color="on_cyan", attrs=["blink"])
     def save_data_csv(path: str, 

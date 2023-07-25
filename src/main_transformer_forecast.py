@@ -70,6 +70,11 @@ Y_COLUMNS = RAW_COLUMNS[-4:]
 
 TGT_COLUMNS = RAW_COLUMNS[-4]
 
+def generate_one_hot_label(label_min: int, label_max: int) -> list:
+    return [f"{TGT_COLUMNS} {i}" for i in range(label_min, label_max)]
+
+HOT_TGT_COLUMNS = generate_one_hot_label(0, 101)
+
 # Read scaling factors
 def load_scaled_national_standards() -> dict:
     """Load scaled national standards from data
@@ -92,20 +97,20 @@ def load_scaled_national_standards() -> dict:
 HYPERPARAMETER = {
     "knowledge_length":             32,     # 4 hours
     "forecast_length":              2,      # 1 hour
-    "input_sequence_size":          None,   # Generated on the fly
-    "output_sequence_size":         None,   # Generated on the fly
+    "dict_size":                    100,
+    "max_input_sequence_size":      None,   # Generated on the fly
     "spatiotemporal_encoding_size": None,   # Generated on the fly
     "batch_size":                   32,    # 32 is pretty small
     "train_val_split_ratio":        0.8,
     "scaled_national_standards":    load_scaled_national_standards(),
     "src_columns":                  X_COLUMNS,
-    "tgt_columns":                  TGT_COLUMNS,
-    "tgt_y_columns":                TGT_COLUMNS,
+    "tgt_columns":                  HOT_TGT_COLUMNS,
+    "tgt_y_columns":                HOT_TGT_COLUMNS,
     "random_seed":                  42,
 }
 
 INPUT_FEATURE_SIZE = len(HYPERPARAMETER["src_columns"])
-FORECAST_FEATURE_SIZE = len(TGT_COLUMNS)
+FORECAST_FEATURE_SIZE = len(HOT_TGT_COLUMNS)
 
 cprint(f"Source columns: {HYPERPARAMETER['src_columns']}", "green")
 cprint(f"Target columns: {HYPERPARAMETER['tgt_columns']}", "green")
@@ -153,7 +158,7 @@ def main() -> None:
     )
     train_size = int(data.shape[0] * HYPERPARAMETER["train_val_split_ratio"])
     val_size = data.shape[0] - train_size
-    
+
     def dataframe_to_loader(
             data: pd.DataFrame,
             ) -> torch.utils.data.DataLoader:
@@ -165,19 +170,18 @@ def main() -> None:
         
         # Split data
         src = np.array(data[HYPERPARAMETER["src_columns"]].values)
-        tgt = np.expand_dims(np.array(data[HYPERPARAMETER["tgt_columns"]].values), axis=1)
+        tgt = np.array(data[HYPERPARAMETER["tgt_columns"]].values)
+        print(tgt.shape)
         timestamp = data.reset_index(names="timestamp")["timestamp"].to_numpy(dtype=np.datetime64)
         
         dataset = WaterFormerDataset(
             src,
             tgt,
             timestamp,
-            HYPERPARAMETER["knowledge_length"] * src.shape[1],
-            HYPERPARAMETER["forecast_length"] * tgt.shape[1],
+            HYPERPARAMETER["knowledge_length"],
+            HYPERPARAMETER["forecast_length"],
             device=DEVICE,
         )
-        HYPERPARAMETER["input_sequence_size"] = dataset.input_sequence_size
-        HYPERPARAMETER["output_sequence_size"] = dataset.output_sequence_size
         HYPERPARAMETER["spatiotemporal_encoding_size"] = dataset.spatiotemporal_encoding_size
 
         loader = torch.utils.data.DataLoader(
@@ -193,8 +197,7 @@ def main() -> None:
     
     # Model
     model: WaterFormer = WaterFormer(
-        HYPERPARAMETER["input_sequence_size"],
-        HYPERPARAMETER["output_sequence_size"],
+        HYPERPARAMETER["dict_size"],
         HYPERPARAMETER["spatiotemporal_encoding_size"],
         device=DEVICE
     ).to(DEVICE)
@@ -203,7 +206,7 @@ def main() -> None:
     print(model)
 
     # Training
-    loss_fn = nn.MSELoss()
+    loss_fn = nn.CrossEntropyLoss()
     ## Additional monitoring
     metrics = []
     mae = nn.L1Loss()

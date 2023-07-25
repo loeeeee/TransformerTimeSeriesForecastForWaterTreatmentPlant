@@ -1074,10 +1074,10 @@ class PositionalEncoding(nn.Module):
 class WaterFormer(nn.Module):
     def __init__(
             self,
-            input_sequence_size: int,
-            output_sequence_size: int,
-            spatiotemporal_encoding_size: int,
+            dict_size: int,
+            word_spatiotemporal_embedding_size: int,
             *args,
+            word_embedding_size: int = 512,
             encoder_layer_cnt: int = 8,
             decoder_layer_cnt: int = 8,
             encoder_layer_head_cnt: int = 7,
@@ -1119,23 +1119,31 @@ class WaterFormer(nn.Module):
         # Take notes of average layer
         self.average_last_n_decoder_output = average_last_n_decoder_output
         
+        # Input embedding convert layer
+        ## Semantic extraction
+        self.input_embedding = nn.Linear(
+            in_features=word_spatiotemporal_embedding_size,
+            out_features=word_embedding_size,
+            device=device,
+        )
+
         # Encoder positional encoding
         self.encoder_positional_encoding = PositionalEncoding(
-            d_model=spatiotemporal_encoding_size,
+            d_model=word_embedding_size,
             batch_first=True,
             device=device,
         )
 
         # Decoder positional encoding
         self.decoder_positional_encoding = PositionalEncoding(
-            d_model=spatiotemporal_encoding_size,
+            d_model=word_embedding_size,
             batch_first=True,
             device=device,
         )
 
         # Encoder layers
         encoder_layer_example = nn.TransformerEncoderLayer(
-            d_model=spatiotemporal_encoding_size,
+            d_model=word_embedding_size,
             nhead=encoder_layer_head_cnt,
             batch_first=isBatchFirst,
             device=device,
@@ -1151,7 +1159,7 @@ class WaterFormer(nn.Module):
         # Decoder layers
         self.decoder_layers = [
             nn.TransformerDecoderLayer(
-                d_model=spatiotemporal_encoding_size,
+                d_model=word_embedding_size,
                 nhead=decoder_layer_head_cnt,
                 batch_first=isBatchFirst,
                 device=device,
@@ -1166,10 +1174,10 @@ class WaterFormer(nn.Module):
         )
 
         # Output dense layer
-        layer_size_after_flatten = spatiotemporal_encoding_size * output_sequence_size
+        layer_size_after_flatten = word_embedding_size * dict_size
         self.output_dense_layer = nn.Linear(
             in_features=layer_size_after_flatten,
-            out_features=output_sequence_size,
+            out_features=dict_size,
         )
 
     
@@ -1185,21 +1193,30 @@ class WaterFormer(nn.Module):
         Returns:
             torch.tensor: Output of decoder
         """
+        # Embedding converting layer
+        ## Passing though the embedding converting layer, tensor shape would change
+        ## [batch_size, input_sequence_size, spatiotemporal_encoding_size]
+        ## To 
+        ## [batch_size, input_sequence_size, word_embedding_size]
+        ## Semantic extraction
+        src = self.input_embedding(src)
+        tgt = self.input_embedding(tgt)
+
         # Encoder side
         ## Passing though the positional encoding, tensor shape would not change
-        ## [batch_size, spatiotemporal_encoding_size, input_sequence_size]
+        ## [batch_size, input_sequence_size, word_embedding_size]
         context = self.encoder_positional_encoding(src)
         ## Passing though the encoder, tensor shape would not change
-        ## [batch_size, spatiotemporal_encoding_size, input_sequence_size]
+        ## [batch_size, input_sequence_size, word_embedding_size]
         context = self.encoder(context)
 
         # Decoder side
         ## Passing though the positional encoding, tensor shape would not change
-        ## [batch_size, spatiotemporal_encoding_size, output_sequence_size]
+        ## [batch_size, input_sequence_size, word_embedding_size]
         target = self.decoder_positional_encoding(tgt)
 
         ## Passing though the decoder, tensor shape would not change
-        ## [batch_size, spatiotemporal_encoding_size, output_sequence_size]
+        ## [batch_size, input_sequence_size, word_embedding_size]
         for decoder_layer in self.decoder_layers[:self.average_last_n_decoder_output]:
             target = decoder_layer(target, context)
 
@@ -1209,16 +1226,16 @@ class WaterFormer(nn.Module):
             average_bucket.append(target)
         
         ## Passing though the average layer
-        ## stacking result: [average_last_n_decoder_output, batch_size, spatiotemporal_encoding_size, output_sequence_size]
-        ## average result: [batch_size, spatiotemporal_encoding_size, output_sequence_size]
+        ## stacking result: [average_last_n_decoder_output, batch_size, input_sequence_size, word_embedding_size]
+        ## average result: [batch_size, input_sequence_size, word_embedding_size]
         average = torch.stack(average_bucket, dim=0).mean(dim=0)
         
         # Output
         ## Passing though flatten layer
         ## Change from
-        ## [batch_size, spatiotemporal_encoding_size, output_sequence_size]
+        ## [batch_size, input_sequence_size, word_embedding_size]
         ## To 
-        ## [batch_size, spatiotemporal_encoding_size * output_sequence_size]
+        ## [batch_size, word_embedding_size * input_sequence_size]
         flatten = self.flatten_layer(average)
         ## Passing though dense layer
         ## Shape is changed to
@@ -1407,7 +1424,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             src: np.ndarray,
             tgt: np.ndarray,
             timestamp: Union[list, np.array],
-            input_sequence_size: int,
+            maximum_knowledge_length: int,
             output_sequence_size: int,
             *args, 
             device: str = "cpu",
@@ -1447,23 +1464,18 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         ]
         """
         super().__init__(*args, **kwargs)
-        self.tgt_y = tgt.copy()
         self.src_feature_length = src.shape[1] # Step size when doing __getitem__
         cprint(f"Source number of features: {self.src_feature_length}", color="green")
         self.tgt_feature_length = tgt.shape[1]
         cprint(f"Target number of features: {self.tgt_feature_length}", color="green")
-        self.knowledge_length = int(input_sequence_size / self.src_feature_length)
+        self.knowledge_length = maximum_knowledge_length
         self.forecast_length = int(output_sequence_size / self.tgt_feature_length)
+        
         # Calculate sequence length
-        self.input_sequence_size = input_sequence_size
-        cprint(f"input sequence size: {input_sequence_size}", "green")
+        self.max_input_sequence_size = maximum_knowledge_length * self.src_feature_length
+        cprint(f"input sequence size: {maximum_knowledge_length}", "green")
         self.output_sequence_size = output_sequence_size
         self.device = device
-
-        # Check if the input sequence size can be segmented in chunk
-        if input_sequence_size % src.shape[1] != 0:
-            cprint("Cannot divide the input sequence into full chunk", "red")
-            raise Exception
         
         self._length = src.shape[0] - self.knowledge_length - self.forecast_length - 1
         if self._length <= 0:
@@ -1480,6 +1492,8 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         cprint("Combine timestamp with target", "cyan")
         self.tgt = self._forge_timestamp_with_data(tgt, self.timestamp)
         cprint(f"Target shape: {self.tgt.shape}", "green")
+        self.tgt_y = np.expand_dims(self.tgt[:, 0].copy(), axis=1)
+        cprint(f"Target Y shape: {self.tgt_y.shape}", "green")
         cprint("Finish initialize\n", "green")
 
         # Note the spatiotemporal_encoding_size
@@ -1502,11 +1516,12 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         Returns:
             Tuple[torch.tensor, torch.tensor, torch.tensor]: src, tgt, tgt_y in sequence
         """
-        src_offset_index = index * self.src_feature_length
-        tgt_offset_index = index * self.tgt_feature_length
-        src = torch.tensor(self.src[src_offset_index: src_offset_index + self.input_sequence_size], device=self.device)
-        tgt = torch.tensor(self.tgt[tgt_offset_index: tgt_offset_index + self.output_sequence_size], device=self.device)
-        tgt_y = torch.tensor(self.tgt_y[index + self.knowledge_length: index + self.knowledge_length + self.forecast_length], device=self.device)
+        index += 1
+        src_offset_index = index * self.src_feature_length + self.max_input_sequence_size
+        tgt_offset_index = index * self.tgt_feature_length + self.output_sequence_size
+        src = torch.tensor(self.src[src_offset_index - self.max_input_sequence_size: src_offset_index], device=self.device)
+        tgt = torch.tensor(self.tgt[tgt_offset_index - self.output_sequence_size: tgt_offset_index], device=self.device)
+        tgt_y = torch.tensor(self.tgt_y[tgt_offset_index: tgt_offset_index + self.output_sequence_size], device=self.device)
         return src, tgt, tgt_y
     
     @staticmethod
@@ -1675,5 +1690,5 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             ...
         ]
         """
-        data = np.concatenate([data, timestamp], axis=1, dtype=np.float32)
+        data = np.concatenate([data, timestamp], axis=1, dtype=np.float32)        
         return data
