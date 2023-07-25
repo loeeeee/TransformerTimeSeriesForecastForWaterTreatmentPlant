@@ -331,9 +331,9 @@ def main() -> None:
         data[discrete_tgt_column].iloc[data[TGT_COLUMNS] == pump_speed_upper_bound] = 1
         data[discrete_tgt_column].iloc[data[TGT_COLUMNS] == pump_speed_lower_bound] = 0
 
-        return data
+        return data, word_dictionary
     
-    data = one_hot_label(data, 100)
+    data, word_dictionary = one_hot_label(data, 100)
     
     # Saving data
     cprint("Saving data.", color="black", on_color="on_cyan", attrs=["blink"])
@@ -379,6 +379,11 @@ def main() -> None:
                   split=False, 
                   )
     
+    # Store the dictionary
+    dictionary_path = os.path.join(DATA_DIR, "dictionary.json")
+    with open(dictionary_path, "w", encoding="utf-8") as f:
+        json.dump(word_dictionary, f, indent=2)
+
     # Store the national standards
     scaled_national_standards_path = os.path.join(DATA_DIR, "scaled_national_standards.json")
     with open(scaled_national_standards_path, "w", encoding="utf-8") as f:
