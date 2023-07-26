@@ -366,7 +366,7 @@ class TransformerLossConsolePlotter:
         self._temp_loss.append(loss)
         return
     
-    def signal_new_dataloader(self) -> None:
+    def do_a_plot(self) -> None:
         """
         Move the plot left a bit.
         """
@@ -393,7 +393,7 @@ class TransformerLossConsolePlotter:
             self._x_axis_cnt += 1
             
             # Pop only if elements are added
-            if self._epoch_cnt >= 1:
+            if self._epoch_cnt >= 2: # So that we could compare two epoch
                 self._loss.pop(0)
                 self._x_axis.pop(0)
 
@@ -978,7 +978,7 @@ class TransformerForecasterVisualLogger:
 
     def segment(self) -> None:
         self.tfp.signal_new_dataloader()
-        self.tlcp.signal_new_dataloader()
+        self.tlcp.do_a_plot()
         return
     
     def signal_finished(self, note: str="") -> None:
@@ -1117,8 +1117,6 @@ class WaterFormer(nn.Module):
             raise NotEnoughLayerToAverage
         # Take notes of device 
         self.device = device
-        # Take notes of average layer
-        self.average_last_n_decoder_output = average_last_n_decoder_output
         
         # Input embedding convert layer
         ## Semantic extraction
@@ -1156,16 +1154,26 @@ class WaterFormer(nn.Module):
             enable_nested_tensor=False,
         )
 
-        # TODO Create mask for decoder
         # Decoder layers
-        self.decoder_layers = [
+        decoder_layer_example = nn.TransformerDecoderLayer(
+            d_model=word_embedding_size,
+            nhead=decoder_layer_head_cnt,
+            batch_first=isBatchFirst,
+            device=device,
+        )
+        self.decoder_1 = nn.TransformerDecoder(
+            decoder_layer=decoder_layer_example,
+            num_layers= decoder_layer_cnt - average_last_n_decoder_output,
+        )
+
+        self.decoder_2 = nn.ModuleList([
             nn.TransformerDecoderLayer(
                 d_model=word_embedding_size,
                 nhead=decoder_layer_head_cnt,
                 batch_first=isBatchFirst,
                 device=device,
-            ) for i in range(decoder_layer_cnt)
-        ] 
+            ) for i in range(average_last_n_decoder_output)
+        ])
 
         # Output dense layer
         # layer_size_after_flatten = word_embedding_size * dict_size
@@ -1177,11 +1185,11 @@ class WaterFormer(nn.Module):
     
     def forward(
             self, 
-            src: torch.tensor, 
-            tgt: torch.tensor, 
-            src_mask: Union[torch.tensor, None] = None, 
-            tgt_mask: Union[torch.tensor, None] = None
-            ) -> torch.tensor:
+            src: torch.Tensor, 
+            tgt: torch.Tensor, 
+            src_mask: Union[torch.Tensor, None] = None, 
+            tgt_mask: Union[torch.Tensor, None] = None
+            ) -> torch.Tensor:
         """Informer style forward
         
         This model will always use batch first tensor format.
@@ -1199,13 +1207,13 @@ class WaterFormer(nn.Module):
         ## To 
         ## [batch_size, input_sequence_size, word_embedding_size]
         ## Semantic extraction
-        src = self.input_embedding(src)
-        tgt = self.input_embedding(tgt)
+        context = self.input_embedding(src)
+        target = self.input_embedding(tgt)
 
         # Encoder side
         ## Passing though the positional encoding, tensor shape would not change
         ## [batch_size, input_sequence_size, word_embedding_size]
-        context = self.encoder_positional_encoding(src)
+        context = self.encoder_positional_encoding(context)
         ## Passing though the encoder, tensor shape would not change
         ## [batch_size, input_sequence_size, word_embedding_size]
         context = self.encoder(
@@ -1215,21 +1223,20 @@ class WaterFormer(nn.Module):
         # Decoder side
         ## Passing though the positional encoding, tensor shape would not change
         ## [batch_size, input_sequence_size, word_embedding_size]
-        target = self.decoder_positional_encoding(tgt)
+        target = self.decoder_positional_encoding(target)
 
         ## Passing though the decoder, tensor shape would not change
         ## [batch_size, input_sequence_size, word_embedding_size]
-        for decoder_layer in self.decoder_layers[:self.average_last_n_decoder_output]:
-            target = decoder_layer(
-                target, 
-                context,
-                memory_mask=src_mask,
-                tgt_mask=tgt_mask,
-                )
-
+        target = self.decoder_1(
+            target,
+            context,
+            memory_mask = src_mask,
+            tgt_mask = tgt_mask,
+            )
+        
         average_bucket = []
-        for decoder_layer in self.decoder_layers[self.average_last_n_decoder_output:]:
-            target = decoder_layer(
+        for i, layer in enumerate(self.decoder_2):
+            target = layer(
                 target, 
                 context,
                 memory_mask=src_mask,
@@ -1248,140 +1255,7 @@ class WaterFormer(nn.Module):
         ## [batch_size, output_sequence_size]
         result = self.output_dense_layer(average)
         return result
-
-    def learn(
-            self,
-            dataloader: torch.utils.data.DataLoader,
-            loss_fn: torch.nn.MSELoss,
-            optimizer: torch.optim.SGD,
-            visual_logger: Union[None, TransformerForecasterVisualLogger] = None,
-            profiler: Union[None, torch.profiler.profile] = None,
-            ) -> None:
-
-        # Model enters training mode
-        self.train()
-
-        # Metadata
-        total_batch = len(dataloader)
-        bar = tqdm(
-            total       = total_batch, 
-            position    = 1,
-            colour      = GREEN,
-            )
-        total_loss = 0
-
-        # Iterate through dataloaders
-        for batch_cnt, (src, tgt, tgt_y) in enumerate(dataloader, start=1):
-            # zero the parameter gradients
-            self.zero_grad(set_to_none=True)
-
-            # Forward
-            with torch.autocast(device_type=self.device):
-                src_mask = generate_square_subsequent_mask(
-                    dim1=tgt.size(1),
-                    dim2=src.size(1),
-                ).to(device=self.device)
-                tgt_mask = generate_square_subsequent_mask(
-                    dim1=tgt.shape[1],
-                    dim2=tgt.shape[1]
-                ).to(device=self.device)
-                # Make forecasts
-                prediction = self(src, tgt, src_mask, tgt_mask)
-                # Compute and backprop loss
-                loss = loss_fn(prediction, tgt_y)
-
-            # Backward
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
-
-            # Take optimizer step
-            optimizer.step()
-
-            # CPU
-            batch_loss = loss.item()
-            total_loss += batch_loss
-
-            # Add data to val_logger
-            if visual_logger != None:
-                visual_logger.append_to_forecast_plotter(tgt_y, prediction)
-                visual_logger.append_to_loss_console_plotter(batch_loss)
-                if batch_cnt % 50 == 0:
-                    visual_logger.segment()
-
-            bar.set_description(desc=f"Instant loss: {loss:.3f}, Continuous loss: {(total_loss/(batch_cnt+1)):.3f}", refresh=True)
-            bar.update()
-        if profiler != None:
-            profiler.step()
-        bar.colour = BLACK
-        bar.close()
-
-        return total_loss / total_batch
-    
-    def val(self,
-            dataloader: torch.utils.data.DataLoader,
-            loss_fn: torch.nn.MSELoss,
-            metrics: list,
-            visual_logger: Union[None, TransformerForecasterVisualLogger] = None,
-            profiler: Union[None, torch.profiler.profile] = None,
-            ) -> None:
-        # Metadata 
-        total_batch = len(dataloader)
-
-        # Start evaluation
-        self.eval()
-
-        additional_loss = {}
-        for additional_monitor in metrics:
-            additional_loss[str(type(additional_monitor))] = 0
-        
-        # Validation
-        test_loss = 0
-        correct = 0
-        bar = tqdm(
-            total       = total_batch, 
-            position    = 1,
-            colour      = GREEN,
-            )
-        with torch.no_grad():
-            for batch_cnt, (src, tgt, tgt_y) in enumerate(dataloader, start=1):
-                # src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
-
-                with torch.autocast(device_type=self.device):
-                    prediction = self(src, tgt)
-                    loss = loss_fn(prediction, tgt_y)
-                    for additional_monitor in metrics:
-                        additional_loss[str(type(additional_monitor))] += additional_monitor(prediction, tgt_y).item()
-
-                # CPU part
-                batch_loss = loss.item()
-                test_loss += batch_loss
-                correct += (prediction == tgt_y).type(torch.float).sum().item()
-
-                # Add data to val_logger
-                if visual_logger != None:
-                    visual_logger.append_to_forecast_plotter(tgt_y, prediction)
-                    visual_logger.append_to_loss_console_plotter(batch_loss)
-                    if batch_cnt % 50 == 0:
-                        visual_logger.segment()
-
-                bar.update()
-                bar.set_description(desc=f"Loss: {(test_loss/(1+batch_cnt)):.3f}", refresh=True)
-                if profiler != None:
-                    profiler.step()
-
-        bar.colour = BLACK
-        bar.close()
-        test_loss /= total_batch
-        correct /= total_batch
-        
-        # Report
-        tqdm.write(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} ")
-        for additional_monitor in metrics:
-            name = str(type(additional_monitor))[8:-2].split(".")[-1]
-            loss = additional_loss[str(type(additional_monitor))] / total_batch
-            tqdm.write(f" {name}: {loss:>8f}")
-
-        return test_loss
+        # return torch.nn.functional.one_hot(torch.ones(32, device=self.device).type(torch.LongTensor), num_classes=100).to(dtype=torch.float32, device=self.device)
 
 
 """
@@ -1437,7 +1311,6 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             tgt: np.ndarray,
             timestamp: Union[list, np.array],
             maximum_knowledge_length: int,
-            forecast_length: int,
             dict_size: int,
             *args, 
             device: str = "cpu",
@@ -1489,7 +1362,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         self.dict_size = dict_size
         self.device = device
         
-        self._length = src.shape[0] - self.knowledge_length
+        self._length = src.shape[0] - self.knowledge_length - 1
         if self._length <= 0:
             raise NotEnoughData
         else:
@@ -1533,8 +1406,8 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         tgt_offset_index = index * self.tgt_feature_length + self.knowledge_length
         src = torch.tensor(self.src[src_offset_index - self.max_input_sequence_size: src_offset_index], device=self.device)
         tgt = torch.tensor(self.tgt[tgt_offset_index - self.knowledge_length: tgt_offset_index], device=self.device)
-        tgt_y = torch.tensor(self.tgt_y[tgt_offset_index - self.knowledge_length + 1: tgt_offset_index + 1], device=self.device).type(torch.LongTensor)
-        tgt_y = torch.nn.functional.one_hot(tgt_y, num_classes=self.dict_size)
+        tgt_y = torch.tensor(self.tgt_y[tgt_offset_index - self.knowledge_length + 1: tgt_offset_index + 1]).type(torch.LongTensor)
+        tgt_y = torch.nn.functional.one_hot(tgt_y, num_classes=self.dict_size).to(dtype=torch.float32, device=self.device)
         return src, tgt, tgt_y
     
     @staticmethod
