@@ -1086,6 +1086,7 @@ class WaterFormer(nn.Module):
             average_last_n_decoder_output: int = 4,
             device: str = "cpu",
             model_name: str = "WaterFormer",
+            hyperparameter_dict: dict = None,
             **kwargs,
             ) -> None:
         super().__init__(*args, **kwargs)
@@ -1120,6 +1121,8 @@ class WaterFormer(nn.Module):
         self.device = device
         # Take notes of model name
         self.name = model_name
+        # Take notes of hyperparameters
+        self.hyperparameter = hyperparameter_dict
         
         # Input embedding convert layer
         ## Semantic extraction
@@ -1259,8 +1262,10 @@ class WaterFormer(nn.Module):
         result = self.output_dense_layer(average)
         return result
 
-    def dump_hyper_parameters(self, dir: str) -> None:
-        
+    def dump_hyperparameter(self, working_dir: str) -> None:
+        cprint("Dumping hyperparameter to json file", "green")
+        with open(os.path.join(working_dir, "hyperparameter.json"), mode="w", encoding="utf-8") as f:
+            json.dump(self.hyperparameter, f)
         return
 
 """

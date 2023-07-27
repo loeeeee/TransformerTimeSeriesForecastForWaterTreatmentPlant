@@ -213,6 +213,7 @@ def main() -> None:
         word_embedding_size=256,
         decoder_layer_head_cnt=4,
         encoder_layer_head_cnt=4,
+        hyperparameter_dict = HYPERPARAMETER,
     ).to(DEVICE)
 
     print(colored("Model structure:", "black", "on_green"), "\n")
@@ -430,7 +431,7 @@ def main() -> None:
     cprint(f"Best trained model has an train loss of {t_train_loss.lowest_loss}", "cyan")
 
     # Dump hyper parameters
-    model.dump_hyper_parameters(WORKING_DIR)
+    model.dump_hyperparameter(WORKING_DIR)
 
     # Save model
     save_model(model, WORKING_DIR, train_loader)
@@ -445,7 +446,16 @@ def main() -> None:
         INPUT_DATA, 
         os.path.join(WORKING_DIR, "data.csv")
         )
+    
+    # Save train data
+    data.head(train_size).to_csv(
+        os.path.join(WORKING_DIR, "train.csv"),
+    )
 
+    # Save evaluation data
+    data.head(val_size).to_csv(
+        os.path.join(WORKING_DIR, "val.csv"),
+    )
     return
 
 if __name__ == "__main__":
