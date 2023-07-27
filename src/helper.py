@@ -196,6 +196,12 @@ def save_model(model: nn.Module, root_saving_dir: str, dataloader) -> None:
         model = model,
         args = args,
         f = save_dir,
+        export_params = True,        # store the trained parameter weights inside the model file
+        do_constant_folding = True,  # whether to execute constant folding for optimization
+        input_names = ['encoder', 'decoder'],   # the model's input names
+        output_names = ['forecast'], # the model's output names
+        dynamic_axes={'input' : {0 : 'batch_size'},    # variable length axes
+                        'output' : {0 : 'batch_size'}}
         )
     return
 

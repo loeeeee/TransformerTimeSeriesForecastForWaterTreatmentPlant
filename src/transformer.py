@@ -1265,7 +1265,7 @@ class WaterFormer(nn.Module):
     def dump_hyperparameter(self, working_dir: str) -> None:
         cprint("Dumping hyperparameter to json file", "green")
         with open(os.path.join(working_dir, "hyperparameter.json"), mode="w", encoding="utf-8") as f:
-            json.dump(self.hyperparameter, f)
+            json.dump(self.hyperparameter, f, indent=2)
         return
 
 """
