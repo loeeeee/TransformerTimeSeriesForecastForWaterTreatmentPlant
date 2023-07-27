@@ -1085,6 +1085,7 @@ class WaterFormer(nn.Module):
             decoder_layer_head_cnt: int = 8,
             average_last_n_decoder_output: int = 4,
             device: str = "cpu",
+            model_name: str = "WaterFormer",
             **kwargs,
             ) -> None:
         super().__init__(*args, **kwargs)
@@ -1117,6 +1118,8 @@ class WaterFormer(nn.Module):
             raise NotEnoughLayerToAverage
         # Take notes of device 
         self.device = device
+        # Take notes of model name
+        self.name = model_name
         
         # Input embedding convert layer
         ## Semantic extraction
@@ -1252,11 +1255,13 @@ class WaterFormer(nn.Module):
         # Output
         ## Passing though dense layer
         ## Shape is changed to
-        ## [batch_size, output_sequence_size]
+        ## [batch_size, input_sequence_size, dict_size]
         result = self.output_dense_layer(average)
         return result
-        # return torch.nn.functional.one_hot(torch.ones(32, device=self.device).type(torch.LongTensor), num_classes=100).to(dtype=torch.float32, device=self.device)
 
+    def dump_hyper_parameters(self, dir: str) -> None:
+        
+        return
 
 """
 

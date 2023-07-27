@@ -187,10 +187,16 @@ def load_data(path, name) -> pd.DataFrame:
 
     return data
 
-def save_model(model: nn.Module, root_saving_dir: str) -> None:
+def save_model(model: nn.Module, root_saving_dir: str, dataloader) -> None:
     print(f"Save data to {root_saving_dir}")
-    save_dir = os.path.join(root_saving_dir, model.model_name)
-    torch.save(model.state_dict(), f"{save_dir}.pt")
+    save_dir = os.path.join(root_saving_dir, f"{model.name}.onnx")
+    example_input = next(iter(dataloader))
+    args = (example_input[0], example_input[1])
+    torch.onnx.export(
+        model = model,
+        args = args,
+        f = save_dir,
+        )
     return
 
 def console_general_data_info(data: pd.DataFrame) -> None:

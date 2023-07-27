@@ -100,11 +100,10 @@ def load_pump_dictionary() -> dict:
 
 # HYPERPARAMETER
 HYPERPARAMETER = {
-    "knowledge_length":             32,     # 4 hours
-    "forecast_length":              2,      # 1 hour
+    "knowledge_length":             64,     # 4 hours
     "max_input_sequence_size":      None,   # Generated on the fly
     "spatiotemporal_encoding_size": None,   # Generated on the fly
-    "batch_size":                   32,    # 32 is pretty small
+    "batch_size":                   64,    # 32 is pretty small
     "train_val_split_ratio":        0.8,
     "scaled_national_standards":    load_scaled_national_standards(),
     "pump_dictionary":              load_pump_dictionary(),
@@ -207,12 +206,18 @@ def main() -> None:
     model: WaterFormer = WaterFormer(
         HYPERPARAMETER["pump_dictionary"]["dict_size"],
         HYPERPARAMETER["spatiotemporal_encoding_size"],
-        device=DEVICE
+        device=DEVICE,
+        encoder_layer_cnt=4,
+        decoder_layer_cnt=4,
+        average_last_n_decoder_output=2,
+        word_embedding_size=256,
+        decoder_layer_head_cnt=4,
+        encoder_layer_head_cnt=4,
     ).to(DEVICE)
 
     print(colored("Model structure:", "black", "on_green"), "\n")
     print(model)
-
+    
     # Training
     loss_fn = nn.CrossEntropyLoss()
     ## Additional monitoring
@@ -222,12 +227,12 @@ def main() -> None:
     ## Optimizer
     lr = 0.0001  # learning rate
     optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
-    scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
+    scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 5.0, gamma=0.995)
     scheduler_1 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer = optimizer,
-        T_0 = 5,
+        T_0 = 20,
     )
-    scheduler = torch.optim.lr_scheduler.ChainedScheduler([scheduler_0, scheduler_1])
+    scheduler = torch.optim.lr_scheduler.ChainedScheduler([scheduler_0])
     t_epoch = TrackerEpoch(50)
     t_val_loss = TrackerLoss(10, model)
     t_train_loss = TrackerLoss(-1, model)
@@ -247,8 +252,9 @@ def main() -> None:
     ## Visualizer
     train_console_plot = TransformerLossConsolePlotter("Train")
     eval_console_plot = TransformerLossConsolePlotter("Eval")
+    writer_loop_size = 50
     
-    with tqdm(total=t_epoch.max_epoch, unit="epoch", position=0) as bar:
+    with tqdm(total=t_epoch.max_epoch, unit="epoch", position=0) as epoch_bar:
         while True:
             try:
                 lr = scheduler.get_last_lr()[0]
@@ -285,14 +291,13 @@ def main() -> None:
                         device=DEVICE,
                     )
                     tgt_mask = generate_square_subsequent_mask(
-                        dim1=tgt.shape[1],
-                        dim2=tgt.shape[1],
+                        dim1=tgt.size(1),
+                        dim2=tgt.size(1),
                         device=DEVICE,
                     )
 
                     # zero the parameter gradients
                     model.zero_grad(set_to_none=True)
-
                     # Forward
                     with torch.autocast(device_type=DEVICE):
                         # Make forecasts
@@ -309,20 +314,21 @@ def main() -> None:
                     optimizer.step()
 
                     # CPU
-                    batch_loss = loss.item()
+                    batch_loss = loss.item() / HYPERPARAMETER["knowledge_length"]
                     train_loss += batch_loss
 
 
                     # Tensorboard
-                    if batch_cnt % 50 == 0:
-                        train_console_plot.append(train_loss)
+                    if batch_cnt % writer_loop_size == 0:
+                        normalized_train_loss = train_loss / writer_loop_size
+                        train_console_plot.append(normalized_train_loss)
                         train_console_plot.do_a_plot()
-                        writer.add_scalar("Train-loss", train_loss, t_epoch.epoch())
+                        writer.add_scalar("Train-loss", normalized_train_loss, t_epoch.epoch())
                         train_loss = 0
-                        writer.add_scalar("Eval-correct", correct, t_epoch.epoch())
+                        writer.add_scalar("Eval-correct", correct / writer_loop_size, t_epoch.epoch())
                         correct = 0
 
-                    bar.set_description(desc=f"Instant loss: {loss:.3f}", refresh=True)
+                    bar.set_description(desc=f"Instant loss: {batch_loss:.3f}", refresh=True)
                     bar.update()
                 bar.colour = BLACK
                 bar.close()
@@ -343,6 +349,8 @@ def main() -> None:
                 # Validation
                 val_loss = 0
                 correct = 0
+                epoch_correct = 0
+                epoch_val_loss = 0
                 bar = tqdm(
                     total       = total_batch, 
                     position    = 1,
@@ -350,8 +358,6 @@ def main() -> None:
                     )
                 with torch.no_grad():
                     for batch_cnt, (src, tgt, tgt_y) in enumerate(val_loader, start=1):
-                        # src, tgt, tgt_y = src.to(self.device), tgt.to(self.device), tgt_y.to(self.device)
-
                         with torch.autocast(device_type=DEVICE):
                             prediction = model(src, tgt)
                             loss = loss_fn(prediction, tgt_y)
@@ -359,29 +365,32 @@ def main() -> None:
                                 additional_loss[str(type(additional_monitor))] += additional_monitor(prediction, tgt_y).item()
 
                         # CPU part
-                        batch_loss = loss.item()
+                        batch_loss = loss.item() / HYPERPARAMETER["knowledge_length"]
                         val_loss += batch_loss
-                        correct += (prediction == tgt_y).type(torch.float).sum().item()
+                        epoch_val_loss += batch_loss
+                        _ = (prediction == tgt_y).type(torch.float).sum().item() / HYPERPARAMETER["knowledge_length"]
+                        correct += _
+                        epoch_correct += _
 
                         # Tensorboard
-                        if batch_cnt % 50 == 0:
-                            eval_console_plot.append(val_loss)
+                        if batch_cnt % writer_loop_size == 0:
+                            normalized_val_loss = val_loss / writer_loop_size
+                            eval_console_plot.append(normalized_val_loss)
                             eval_console_plot.do_a_plot()
-                            writer.add_scalar("Eval-loss", val_loss, t_epoch.epoch())
+                            writer.add_scalar("Eval-loss", normalized_val_loss, t_epoch.epoch())
                             val_loss = 0
-                            writer.add_scalar("Eval-correct", correct, t_epoch.epoch())
+                            writer.add_scalar("Eval-correct", correct / writer_loop_size, t_epoch.epoch())
                             correct = 0
 
                         bar.update()
-                        bar.set_description(desc=f"Loss: {(val_loss/(1+batch_cnt)):.3f}", refresh=True)
+                        bar.set_description(desc=f"Loss: {batch_loss:.3f}", refresh=True)
                 bar.colour = BLACK
                 bar.close()
                 val_loss /= total_batch
-                correct /= total_batch
-
+                epoch_correct /= total_batch
                 
                 # Report
-                tqdm.write(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {val_loss:>8f} ")
+                tqdm.write(f"Test Error: \n Accuracy: {(100*epoch_correct):>0.1f}%, Avg loss: {epoch_val_loss:>8f} ")
                 for additional_monitor in metrics:
                     name = str(type(additional_monitor))[8:-2].split(".")[-1]
                     loss = additional_loss[str(type(additional_monitor))] / total_batch
@@ -402,11 +411,11 @@ def main() -> None:
                 if not t_train_loss.check(train_loss, model):
                     tqdm.write(colored("Training loss no longer decrease, finish training", "green", "on_red"))
                     break
-                bar.update()
+                epoch_bar.update()
             except KeyboardInterrupt:
                 tqdm.write(colored("Early stop triggered by Keyboard Input", "green", "on_red"))
                 break
-        bar.close()
+        epoch_bar.close()
     #profiler.stop()
 
     writer.close()
@@ -417,20 +426,26 @@ def main() -> None:
     model = t_val_loss.get_best_model()
     print(colored(f"The best model has the validation loss of {t_val_loss.lowest_loss}", "cyan"))
     model_best_train = t_train_loss.get_best_model()
-    model_best_train.model_name += "_best_trained"
+    model_best_train.name += "_best_trained"
     cprint(f"Best trained model has an train loss of {t_train_loss.lowest_loss}", "cyan")
 
     # Dump hyper parameters
     model.dump_hyper_parameters(WORKING_DIR)
 
     # Save model
-    save_model(model, WORKING_DIR)
-    save_model(model_best_train, WORKING_DIR)
+    save_model(model, WORKING_DIR, train_loader)
+    save_model(model_best_train, WORKING_DIR, train_loader)
+
+    # Visualize loss
     visualize_loss(t_val_loss, WORKING_DIR, f"{MODEL_NAME}_val")
     visualize_loss(t_train_loss, WORKING_DIR, f"{MODEL_NAME}_train")
 
     # Save data
-    save_data(INPUT_DATA, WORKING_DIR)
+    shutil.copyfile(
+        INPUT_DATA, 
+        os.path.join(WORKING_DIR, "data.csv")
+        )
+
     return
 
 if __name__ == "__main__":
