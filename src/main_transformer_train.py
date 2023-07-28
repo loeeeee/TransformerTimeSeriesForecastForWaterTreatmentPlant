@@ -4,7 +4,7 @@ This transformer code works on the fully normalized input, and multiply the loss
 import settings # Get config
 
 from helper import *
-from transformer import WaterFormer, TransformerLossConsolePlotter, WaterFormerDataset, transformer_collate_fn, generate_square_subsequent_mask, GREEN, BLACK
+from transformer import WaterFormer, TransformerLossConsolePlotter, WaterFormerDataset, transformer_collate_fn, generate_square_subsequent_mask, GREEN, BLACK, CosineWarmupScheduler
 
 import torch
 from torch import nn
@@ -32,8 +32,9 @@ except IndexError:
     # Get the current timestamp
     current_time = datetime.now()
     # Format the timestamp as YY-MM-DD-HH-MM
-    formatted_time = current_time.strftime("%y-%m-%d-%H-%M")
+    formatted_time = current_time.strftime("%y-%m-%d-%H-%M-%s")
     MODEL_NAME = f"trans_for_{formatted_time}"
+
 VISUAL_DIR = settings.VISUAL_DIR
 DATA_DIR = settings.DATA_DIR
 MODEL_DIR = settings.MODEL_DIR
@@ -42,7 +43,11 @@ RAW_DIR = settings.RAW_DIR
 
 # Create working dir
 WORKING_DIR = os.path.join(MODEL_DIR, MODEL_NAME)
-create_folder_if_not_exists(WORKING_DIR)
+isResumed = create_folder_if_not_exists(WORKING_DIR)
+# Create check point dir
+CHECKPOINT_PATH = os.path.join(WORKING_DIR, "checkpoint.pt")
+if isResumed:
+    INPUT_DATA = os.path.join(WORKING_DIR, "data.csv")
 
 print(colored(f"Read from {INPUT_DATA}", "black", "on_green"))
 print(colored(f"Save all files to {WORKING_DIR}", "black", "on_green"))
@@ -100,10 +105,9 @@ def load_pump_dictionary() -> dict:
 
 # HYPERPARAMETER
 HYPERPARAMETER = {
-    "knowledge_length":             64,     # 4 hours
-    "max_input_sequence_size":      None,   # Generated on the fly
-    "spatiotemporal_encoding_size": None,   # Generated on the fly
-    "batch_size":                   64,    # 32 is pretty small
+    "knowledge_length":             128,    
+    "spatiotemporal_encoding_size": None,  # Generated on the fly
+    "batch_size":                   128,    # 32 is pretty small
     "train_val_split_ratio":        0.8,
     "scaled_national_standards":    load_scaled_national_standards(),
     "pump_dictionary":              load_pump_dictionary(),
@@ -111,6 +115,12 @@ HYPERPARAMETER = {
     "tgt_columns":                  TGT_COLUMNS,
     "tgt_y_columns":                TGT_COLUMNS,
     "random_seed":                  42,
+    "encoder_layer_cnt":            2,
+    "decoder_layer_cnt":            2,
+    "average_last_n_decoder_output":1,
+    "word_embedding_size":          128,
+    "decoder_layer_head_cnt":       2,
+    "encoder_layer_head_cnt":       2,
 }
 
 INPUT_FEATURE_SIZE = len(HYPERPARAMETER["src_columns"])
@@ -148,13 +158,37 @@ def save_data(
             shutil.copy2(s, d)
     return
 
+def save_checkpoint(
+        model: nn.Module,
+        optimizer,
+        hyperparameter: dict,
+        ) -> None:
+    # Save current training state to checkpoint
+    torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'hyperparameter': hyperparameter,
+            }, CHECKPOINT_PATH)
+    return None
+
 # Main
 
 def main() -> None:
     print(colored(f"Using {DEVICE} for training", "black", "on_green"), "\n")
+    
+    if isResumed:
+        cprint("--------------------------------", "red", "on_green", attrs=["blink"])
+        cprint("Resuming existing model training", "red", "on_green", attrs=["blink"])
+        cprint("--------------------------------", "red", "on_green", attrs=["blink"])
+        print()
+        # Read input data from the existing checkpoint
+        checkpoint = torch.load(CHECKPOINT_PATH)
+        global HYPERPARAMETER
+        HYPERPARAMETER = checkpoint["hyperparameter"]
+    print(f"Hyperparameter:\n{json.dumps(HYPERPARAMETER, indent=2)}")
 
     print("Init TensorBoard!")
-    writer = SummaryWriter()
+    writer = SummaryWriter(WORKING_DIR)
 
     # Read data and do split
     data = pd.read_csv(
@@ -207,12 +241,12 @@ def main() -> None:
         HYPERPARAMETER["pump_dictionary"]["dict_size"],
         HYPERPARAMETER["spatiotemporal_encoding_size"],
         device=DEVICE,
-        encoder_layer_cnt=4,
-        decoder_layer_cnt=4,
-        average_last_n_decoder_output=2,
-        word_embedding_size=256,
-        decoder_layer_head_cnt=4,
-        encoder_layer_head_cnt=4,
+        encoder_layer_cnt               = HYPERPARAMETER["encoder_layer_cnt"],
+        decoder_layer_cnt               = HYPERPARAMETER["decoder_layer_cnt"],
+        average_last_n_decoder_output   = HYPERPARAMETER["average_last_n_decoder_output"],
+        word_embedding_size             = HYPERPARAMETER["word_embedding_size"],
+        decoder_layer_head_cnt          = HYPERPARAMETER["decoder_layer_head_cnt"],
+        encoder_layer_head_cnt          = HYPERPARAMETER["encoder_layer_head_cnt"],
         hyperparameter_dict = HYPERPARAMETER,
     ).to(DEVICE)
 
@@ -226,15 +260,16 @@ def main() -> None:
     mae = nn.L1Loss()
     metrics.append(mae)
     ## Optimizer
-    lr = 0.0001  # learning rate
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+    lr = 0.01  # learning rate
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 5.0, gamma=0.995)
+    scheduler_2 = CosineWarmupScheduler(optimizer=optimizer, warmup=100, max_iters=2000)
     scheduler_1 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer = optimizer,
         T_0 = 20,
     )
-    scheduler = torch.optim.lr_scheduler.ChainedScheduler([scheduler_0])
-    t_epoch = TrackerEpoch(50)
+    scheduler = torch.optim.lr_scheduler.ChainedScheduler([scheduler_2, scheduler_0])
+    t_epoch = TrackerEpoch(200)
     t_val_loss = TrackerLoss(10, model)
     t_train_loss = TrackerLoss(-1, model)
     print(colored("Training:", "black", "on_green"), "\n")
@@ -254,6 +289,11 @@ def main() -> None:
     train_console_plot = TransformerLossConsolePlotter("Train")
     eval_console_plot = TransformerLossConsolePlotter("Eval")
     writer_loop_size = 50
+
+    # Load checkpoint
+    if isResumed:
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     
     with tqdm(total=t_epoch.max_epoch, unit="epoch", position=0) as epoch_bar:
         while True:
@@ -334,6 +374,7 @@ def main() -> None:
                 bar.colour = BLACK
                 bar.close()
 
+                scheduler.step()
                 #--------------#
                 #--Evaluation--#
                 #--------------#
@@ -396,7 +437,14 @@ def main() -> None:
                     name = str(type(additional_monitor))[8:-2].split(".")[-1]
                     loss = additional_loss[str(type(additional_monitor))] / total_batch
                     tqdm.write(f" {name}: {loss:>8f}")
-                scheduler.step()
+                
+                # Checkpoint
+                if t_epoch.epoch() % 10 == 0:
+                    save_checkpoint(
+                        model=model,
+                        optimizer=optimizer,
+                        hyperparameter=HYPERPARAMETER,
+                    )
 
                 #-------------#
                 #--Finish Up--#
@@ -421,6 +469,13 @@ def main() -> None:
 
     writer.close()
 
+    # Save current training state to checkpoint
+    save_checkpoint(
+        model=model,
+        optimizer=optimizer,
+        hyperparameter=HYPERPARAMETER,
+    )
+    
     print(colored("Done!", "black", "on_green"), "\n")
     
     # Bring back the best known model
@@ -430,32 +485,38 @@ def main() -> None:
     model_best_train.name += "_best_trained"
     cprint(f"Best trained model has an train loss of {t_train_loss.lowest_loss}", "cyan")
 
-    # Dump hyper parameters
-    model.dump_hyperparameter(WORKING_DIR)
+    if not isResumed:
+        # If it is the first time the model is running
+
+        # Dump hyper parameters
+        model.dump_hyperparameter(WORKING_DIR)
+
+    
+        # Save data
+        shutil.copyfile(
+            INPUT_DATA, 
+            os.path.join(WORKING_DIR, "data.csv")
+            )
+        
+        # Save train data
+        data.head(train_size).to_csv(
+            os.path.join(WORKING_DIR, "train.csv"),
+        )
+
+        # Save evaluation data
+        data.head(val_size).to_csv(
+            os.path.join(WORKING_DIR, "val.csv"),
+        )
+
 
     # Save model
     save_model(model, WORKING_DIR, train_loader)
     save_model(model_best_train, WORKING_DIR, train_loader)
-
+    
     # Visualize loss
     visualize_loss(t_val_loss, WORKING_DIR, f"{MODEL_NAME}_val")
     visualize_loss(t_train_loss, WORKING_DIR, f"{MODEL_NAME}_train")
 
-    # Save data
-    shutil.copyfile(
-        INPUT_DATA, 
-        os.path.join(WORKING_DIR, "data.csv")
-        )
-    
-    # Save train data
-    data.head(train_size).to_csv(
-        os.path.join(WORKING_DIR, "train.csv"),
-    )
-
-    # Save evaluation data
-    data.head(val_size).to_csv(
-        os.path.join(WORKING_DIR, "val.csv"),
-    )
     return
 
 if __name__ == "__main__":

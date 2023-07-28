@@ -192,6 +192,7 @@ def save_model(model: nn.Module, root_saving_dir: str, dataloader) -> None:
     save_dir = os.path.join(root_saving_dir, f"{model.name}.onnx")
     example_input = next(iter(dataloader))
     args = (example_input[0], example_input[1])
+    model.eval()
     torch.onnx.export(
         model = model,
         args = args,
@@ -200,8 +201,10 @@ def save_model(model: nn.Module, root_saving_dir: str, dataloader) -> None:
         do_constant_folding = True,  # whether to execute constant folding for optimization
         input_names = ['encoder', 'decoder'],   # the model's input names
         output_names = ['forecast'], # the model's output names
-        dynamic_axes={'input' : {0 : 'batch_size'},    # variable length axes
-                        'output' : {0 : 'batch_size'}}
+        dynamic_axes = {'encoder' : {0: 'batch_size', 1: 'flatten_encoder_sequence'},    # variable length axes
+                        'decoder' : {0: 'batch_size', 1: 'flatten_decoder_sequence'},
+                        'forecast': {0: 'batch_size', 1: 'output_sequence'}
+                        }
         )
     return
 
@@ -217,7 +220,7 @@ def console_general_data_info(data: pd.DataFrame) -> None:
 
 def create_folder_if_not_exists(dir) -> bool:
     """
-    Return bool, indicating if the folder is *newly* created
+    Return bool, indicating if the folder is *newly* created, True means exists
     """
     if not (isExist := os.path.exists(dir)):
         os.mkdir(dir)
