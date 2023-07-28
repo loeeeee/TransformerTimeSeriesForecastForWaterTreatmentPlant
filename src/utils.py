@@ -155,5 +155,3 @@ def read_data(data_dir: Union[str, Path] = "data",
     data.sort_values(by=[timestamp_col_name], inplace=True)
 
     return data
-
-
