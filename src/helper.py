@@ -187,14 +187,15 @@ def load_data(path, name) -> pd.DataFrame:
 
     return data
 
-def save_model(model: nn.Module, root_saving_dir: str, dataloader) -> None:
+def save_model(model: nn.Module, root_saving_dir: str, dataloader, device: str) -> None:
     print(f"Save data to {root_saving_dir}")
     save_dir = os.path.join(root_saving_dir, f"{model.name}.onnx")
     example_input = next(iter(dataloader))
-    args = (example_input[0], example_input[1])
+    args = (example_input[0].to(device=device), example_input[1].to(device=device))
     model.eval()
+    scripted = torch.jit.trace(model.forward, example_inputs=args, check_trace=False) # HACK
     torch.onnx.export(
-        model = model,
+        model = scripted,
         args = args,
         f = save_dir,
         export_params = True,        # store the trained parameter weights inside the model file
@@ -204,7 +205,8 @@ def save_model(model: nn.Module, root_saving_dir: str, dataloader) -> None:
         dynamic_axes = {'encoder' : {0: 'batch_size', 1: 'flatten_encoder_sequence'},    # variable length axes
                         'decoder' : {0: 'batch_size', 1: 'flatten_decoder_sequence'},
                         'forecast': {0: 'batch_size', 1: 'output_sequence'}
-                        }
+                        },
+        opset_version = 18,
         )
     return
 

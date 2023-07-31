@@ -1187,14 +1187,19 @@ class WaterFormer(nn.Module):
             in_features=word_embedding_size,
             out_features=dict_size,
         )
-
+        
+    def init_weights(self) -> None:
+        init_range = 0.1
+        self.input_embedding.weight.data.uniform_(-init_range, init_range)
+        self.output_dense_layer.bias.data.zero_()
+        self.output_dense_layer.weight.data.uniform_(-init_range, init_range)
     
     def forward(
             self, 
             src: torch.Tensor, 
             tgt: torch.Tensor, 
-            src_mask: Union[torch.Tensor, None] = None, 
-            tgt_mask: Union[torch.Tensor, None] = None
+            memory_mask: Optional[torch.Tensor] = None, 
+            tgt_mask: Optional[torch.Tensor] = None,
             ) -> torch.Tensor:
         """Informer style forward
         
@@ -1206,7 +1211,7 @@ class WaterFormer(nn.Module):
 
         Returns:
             torch.tensor: Output of decoder
-        """
+        """            
         # Embedding converting layer
         ## Passing though the embedding converting layer, tensor shape would change
         ## [batch_size, input_sequence_size, spatiotemporal_encoding_size]
@@ -1233,22 +1238,35 @@ class WaterFormer(nn.Module):
 
         ## Passing though the decoder, tensor shape would not change
         ## [batch_size, input_sequence_size, word_embedding_size]
-        target = self.decoder_1(
-            target,
-            context,
-            memory_mask = src_mask,
-            tgt_mask = tgt_mask,
-            )
-        
-        average_bucket = []
-        for i, layer in enumerate(self.decoder_2):
-            target = layer(
-                target, 
+        if not (memory_mask is None and tgt_mask is None):
+            target = self.decoder_1(
+                target,
                 context,
-                memory_mask=src_mask,
-                tgt_mask=tgt_mask,
+                memory_mask = memory_mask,
+                tgt_mask = tgt_mask,
                 )
-            average_bucket.append(target)
+
+            average_bucket = []
+            for i, layer in enumerate(self.decoder_2):
+                target = layer(
+                    target, 
+                    context,
+                    memory_mask = memory_mask,
+                    tgt_mask=tgt_mask,
+                    )
+                average_bucket.append(target)
+        else:
+            target = self.decoder_1(
+                target,
+                context,
+                )
+            average_bucket = []
+            for i, layer in enumerate(self.decoder_2):
+                target = layer(
+                    target, 
+                    context,
+                    )
+                average_bucket.append(target)
         
         ## Passing though the average layer
         ## stacking result: [average_last_n_decoder_output, batch_size, input_sequence_size, word_embedding_size]
@@ -1323,11 +1341,11 @@ def transformer_collate_fn(data):
             ...
         ]
     """
-    result = [[], [], []]
-    for i in range(3):
+    result = [[], [], [], []]
+    for i in range(4):
         result[i] = [temp[i] for temp in data]
         result[i] = torch.stack(result[i])
-    return result[0], result[1], result[2]
+    return result[0], result[1], result[2], result[3]
 
 
 class WaterFormerDataset(torch.utils.data.Dataset):
@@ -1417,7 +1435,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         """
         return int(self._length)
     
-    def __getitem__(self, index: int) -> Tuple[torch.tensor, torch.tensor, torch.tensor]:
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get the *index* item in the dataset, the dataset is using sliding windows
 
         Args:
@@ -1437,7 +1455,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             [encode],
         ]
         """
-        tgt_y = torch.tensor(self.tgt_y[tgt_offset_index - self.knowledge_length * self.tgt_feature_length + 1: tgt_offset_index + 1]).type(torch.LongTensor)
+        raw_tgt_y = torch.tensor(self.tgt_y[tgt_offset_index - self.knowledge_length * self.tgt_feature_length + 1: tgt_offset_index + 1]).type(torch.LongTensor).to(device=self.device)
         """tgt_y
         [
             word,
@@ -1445,7 +1463,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             word,
         ]
         """
-        tgt_y = torch.nn.functional.one_hot(tgt_y, num_classes=self.dict_size).to(dtype=torch.float32, device=self.device)
+        hot_tgt_y = torch.nn.functional.one_hot(raw_tgt_y, num_classes=self.dict_size).to(dtype=torch.float32, device=self.device)
         """tgt_y
         [
             [one_hot],
@@ -1454,7 +1472,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             [one_hot],
         ]
         """
-        return src, tgt, tgt_y
+        return (src, tgt, hot_tgt_y, raw_tgt_y)
     
     @staticmethod
     def _convert_timestamp(timestamp: Union[list, np.array]):
