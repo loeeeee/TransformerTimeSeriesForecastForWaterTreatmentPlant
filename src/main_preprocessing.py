@@ -301,7 +301,7 @@ def main() -> None:
         cprint(f"Unique value:", "green")
         print(unique_values)
         pump_speed_upper_bound = unique_values[-1] # Upper bound will always be 100%, it is probably 50
-        pump_speed_lower_bound = unique_values[0] # Lower bound is probably 0
+        pump_speed_lower_bound = unique_values[0] # Lower bound is probably 0, not really
 
         word_dictionary = {
             "overload": pump_speed_upper_bound,
@@ -317,11 +317,11 @@ def main() -> None:
             else:
                 return False
         possible_words = np.linspace(unique_values[0], unique_values[-2] + 0.000001, num=dict_size - 1)
-        for word, (lower, upper) in enumerate(zip(possible_words[:-1], possible_words[1:]), start=1):
+        for word, (lower, upper) in enumerate(zip(possible_words[:-1], possible_words[1:])):
             mask = data[TGT_COLUMNS].apply(lambda x: _judge(x, lower, upper))
             data[discrete_tgt_column].iloc[mask] = word
         
-        data[discrete_tgt_column].iloc[data[TGT_COLUMNS] == pump_speed_upper_bound] = 0
+        data[discrete_tgt_column].iloc[data[TGT_COLUMNS] == pump_speed_upper_bound] = dict_size - 1
 
         return data, word_dictionary
     

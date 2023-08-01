@@ -24,3 +24,4 @@ runs
 .venv
 .directory
 .vscode
+test.py

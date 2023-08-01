@@ -762,8 +762,8 @@ class TransformerForecastPlotter:
                 which_to_plot.append(i)
                 
         x_axis = [j for j in range(len(forecast_guess))]
-        label = f"{i}-unit forecast line"
-        ax.plot(x_axis, forecast_guess, linewidth=0.7, label=label, alpha=0.5)
+        label = "1-unit forecast"
+        ax.plot(x_axis, forecast_guess, linewidth=0.7, label=label, alpha=0.3)
             
         # Add labels and title
         ax.set_xlabel('Time')
@@ -1012,9 +1012,11 @@ class WaterFormer(nn.Module):
             in_features=word_embedding_size,
             out_features=dict_size,
         )
+
+        self._init_weights()
         
-    def init_weights(self) -> None:
-        init_range = 0.1
+    def _init_weights(self) -> None:
+        init_range = 23
         self.input_embedding.weight.data.uniform_(-init_range, init_range)
         self.output_dense_layer.bias.data.zero_()
         self.output_dense_layer.weight.data.uniform_(-init_range, init_range)

@@ -107,7 +107,7 @@ def load_pump_dictionary() -> dict:
 HYPERPARAMETER = {
     "knowledge_length":             64,    
     "spatiotemporal_encoding_size": None,  # Generated on the fly
-    "batch_size":                   32,    # 32 is pretty small
+    "batch_size":                   128,    # 32 is pretty small
     "train_val_split_ratio":        0.7,
     "scaled_national_standards":    load_scaled_national_standards(),
     "pump_dictionary":              load_pump_dictionary(),
@@ -499,7 +499,6 @@ def main() -> None:
         # Dump hyper parameters
         model.dump_hyperparameter(WORKING_DIR)
 
-    
         # Save data
         shutil.copyfile(
             INPUT_DATA, 
@@ -507,12 +506,12 @@ def main() -> None:
             )
         
         # Save train data
-        data.head(train_size).to_csv(
+        train_data.to_csv(
             os.path.join(WORKING_DIR, "train.csv"),
         )
 
         # Save evaluation data
-        data.head(val_size).to_csv(
+        val_data.to_csv(
             os.path.join(WORKING_DIR, "val.csv"),
         )
 
