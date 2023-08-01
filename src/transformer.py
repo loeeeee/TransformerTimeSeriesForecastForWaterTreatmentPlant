@@ -453,27 +453,27 @@ class TransformerTruthAndGuess:
         """
         # Metadata
         batch_size = truth.shape[0]
-        forecast_length = truth.shape[1]
+        # forecast_length = truth.shape[1]
         
         # Not necessary if only use cpu
         truth = truth.detach().clone().cpu().tolist()
         guess = guess.detach().clone().cpu().tolist()
 
         # Init in batch forecast guess
-        if self._forecast_guess == []:
-            self._forecast_guess = [[] for i in range(forecast_length)]
+        # if self._forecast_guess == []:
+        #     self._forecast_guess = [[] for i in range(forecast_length)]
         
         # Organize data
         for i in range(batch_size):
-            self._ground_truth.append(truth[i][0][0])
-            for j in range(forecast_length):
-                self._forecast_guess[j].append(guess[i][j][0])
+            self._ground_truth.append(truth[i][0])
+            self._forecast_guess.append(guess[i][0])
+            #for j in range(forecast_length):
 
         # Dropping last data
         ## Ground truth is shorter than the forecast_guess
         ## Cut the forecast guess to the length of the ground truth
-        ground_truth_length = len(self._ground_truth)
-        self._forecast_guess = [i[:ground_truth_length] for i in self._forecast_guess]
+        #ground_truth_length = len(self._ground_truth)
+        #self._forecast_guess = [i[:ground_truth_length] for i in self._forecast_guess]
         return
     
     def get(self) -> tuple:
@@ -515,7 +515,7 @@ class TransformerForecastPlotter:
         """
         self.name = name
         self.working_dir = working_dir
-        self.runtime_plotting = runtime_plotting
+        # self.runtime_plotting = runtime_plotting
         self.which_to_plot = which_to_plot
         self.isFinished = False
         self.epoch_cnt = -1 
@@ -637,7 +637,7 @@ class TransformerForecastPlotter:
             return
 
         # Start plotting
-        if not self.isFinished and self.runtime_plotting:
+        if not self.isFinished:
             self._plot_truth_vs_guess_init(
                 idx = self.epoch_cnt,
                 which_to_plot = self.which_to_plot,
@@ -645,52 +645,6 @@ class TransformerForecastPlotter:
                 format = self.format,
                 note = note,
             )
-        elif self.isFinished and not self.runtime_plotting:
-            # Find y_min_max in both ground truth and forecast guess
-            global_min = []
-            global_max = []
-            for epoch_data in self._truth_guess_per_epoch:
-                # Find the minimum and maximum of the value
-                """
-                Data structure of TransformerTruthAndGuess.get()
-                (
-                []: truth,
-                [[]]: guess
-                )
-                """
-                truth_min = min(
-                    [(lambda x: min(x.get()[0]))(dataloader_data) 
-                     for dataloader_data in epoch_data]
-                    )
-                guess_min = min(
-                    [(lambda x: self._find_minimum_value(x.get()[1]))(dataloader_data) 
-                     for dataloader_data in epoch_data]
-                    )
-                truth_max = max(
-                    [(lambda x: max(x.get()[0]))(dataloader_data) 
-                     for dataloader_data in epoch_data]
-                    )
-                guess_max = max(
-                    [(lambda x: self._find_maximum_value(x.get()[1]))(dataloader_data) 
-                     for dataloader_data in epoch_data]
-                    )
-                global_min.append(min(truth_min, guess_min))
-                global_max.append(max(truth_max, guess_max))
-
-            global_min = min(global_min)
-            global_max = max(global_max)
-
-            y_min_max = (global_min, global_max)
-
-            for i in range(len(self._truth_guess_per_epoch)):
-                self._plot_truth_vs_guess_init(
-                    idx = i,
-                    which_to_plot = self.which_to_plot,
-                    y_min_max= y_min_max,
-                    in_one_figure = self.in_one_figure,
-                    format = self.format,
-                    note = note,
-                )
         return
     
     def signal_finished(self, note: str="") -> None:
@@ -807,11 +761,9 @@ class TransformerForecastPlotter:
             for i in range(len(forecast_guess)):
                 which_to_plot.append(i)
                 
-        for i, c in zip(which_to_plot, default_colors):
-            x_axis = [j+i for j in range(len(forecast_guess[i]))]
-            data = forecast_guess[i]
-            label = f"{i}-unit forecast line"
-            ax.plot(x_axis, data, linewidth=0.7, label=label, color=c, alpha=0.5)
+        x_axis = [j for j in range(len(forecast_guess))]
+        label = f"{i}-unit forecast line"
+        ax.plot(x_axis, forecast_guess, linewidth=0.7, label=label, alpha=0.5)
             
         # Add labels and title
         ax.set_xlabel('Time')
@@ -873,134 +825,6 @@ class TransformerForecastPlotter:
         new_sequence_number = max_sequence + 1
 
         return new_sequence_number
-    
-    def _find_minimum_value(self, matrix) -> float:
-        """
-        Find the minimum value in a 2-D matrix
-        """
-        # Initialize the minimum value with the first element in the matrix
-        min_value = 0x3f3f3f3f
-
-        # Iterate over each row in the matrix
-        for row in matrix:
-            if len(row) == 1:
-                local_minimum = row[0]
-            else:
-                local_minimum = min(*row)
-            if local_minimum < min_value:
-                min_value = local_minimum
-
-        return min_value
-    
-    def _find_maximum_value(self, matrix) -> float:
-        """
-        Find the maximum value in a 2-D matrix
-        """
-        # Initialize the minimum value with the first element in the matrix
-        max_value = -0x3f3f3f3f
-
-        # Iterate over each row in the matrix
-        for row in matrix:
-            if len(row) == 1:
-                local_maximum = row[0]
-            else:
-                local_maximum = max(*row)
-            if local_maximum > max_value:
-                max_value = local_maximum
-
-        return max_value
-    
-class TransformerClassifierPlotter(TransformerForecastPlotter):
-    def __init__(self, 
-                 name: str, 
-                 working_dir: str, 
-                 runtime_plotting: bool = True, 
-                 which_to_plot: list | None = None,
-                 in_one_figure: bool = False,
-                plot_interval: int = 1,
-                 ) -> None:
-        """
-        Because the data structure is different, a new class is needed.
-        """
-        super().__init__(name, 
-                         working_dir, 
-                         runtime_plotting, 
-                         which_to_plot,
-                         in_one_figure,
-                         plot_interval,
-                         )
-    
-    def append(self, ground_truth, forecast_guess) -> None:
-        """
-        When running classification model, the size of ground truth is [forecast length, batch size, one-hot label count];
-        the size of forecast guess is [forecast length, batch size, one-hot label count]
-        ground truth: [
-            [
-                [0, 0, 0, 0, 1, 0, 0, 0, 0...],
-                [0, 0, 0, 1, 0, 0, 0, 0, 0...],
-                ...
-            ],
-            ...
-        ]
-        """
-        ground_truth = torch.argmax(ground_truth, dim=2).unsqueeze(2)
-        forecast_guess = torch.argmax(forecast_guess, dim=2).unsqueeze(2)
-        return super().append(ground_truth, forecast_guess)
-        
-    
-class TransformerForecasterVisualLogger:
-    def __init__(self, 
-                name: str,
-                working_dir: str, 
-                runtime_plotting: bool = True,
-                which_to_plot: Union[None, list] = None,
-                in_one_figure: bool = False,
-                plot_interval: int = 1,
-                format: str = "png",
-                ) -> None:
-        
-        self.tfp = TransformerForecastPlotter(
-            name,
-            working_dir,
-            runtime_plotting=runtime_plotting,
-            which_to_plot=which_to_plot,
-            in_one_figure=in_one_figure,
-            plot_interval=plot_interval,
-            format=format,
-        )
-        self.tlcp = TransformerLossConsolePlotter(
-            name,
-        )
-
-    def signal_new_epoch(self, note: str="") -> None:
-        self.tfp.signal_new_epoch(note=note)
-        self.tlcp.signal_new_epoch()
-        return
-
-    def segment(self) -> None:
-        self.tfp.signal_new_dataloader()
-        self.tlcp.do_a_plot()
-        return
-    
-    def signal_finished(self, note: str="") -> None:
-        self.tfp.signal_finished(note=note)
-        return
-
-    def save_data(self, dir_overwrite: str="") -> None:
-        self.tfp.save_data(dir_overwrite=dir_overwrite)
-        return
-    
-    def load_data(self) -> None:
-        self.tfp.load_data()
-        return
-    
-    def append_to_forecast_plotter(self, ground_truth, forecast_guess) -> None:
-        self.tfp.append(ground_truth, forecast_guess)
-        return
-    
-    def append_to_loss_console_plotter(self, loss) -> None:
-        self.tlcp.append(loss)
-        return
 
 """
 

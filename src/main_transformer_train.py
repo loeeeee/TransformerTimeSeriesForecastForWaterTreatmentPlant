@@ -4,7 +4,7 @@ This transformer code works on the fully normalized input, and multiply the loss
 import settings # Get config
 
 from helper import *
-from transformer import WaterFormer, TransformerLossConsolePlotter, WaterFormerDataset, transformer_collate_fn, generate_square_subsequent_mask, GREEN, BLACK, CosineWarmupScheduler
+from transformer import WaterFormer, TransformerLossConsolePlotter, WaterFormerDataset, transformer_collate_fn, generate_square_subsequent_mask, GREEN, BLACK, TransformerForecastPlotter
 
 import torch
 from torch import nn
@@ -264,15 +264,7 @@ def main() -> None:
     ## Optimizer
     lr = 0.0000001  # learning rate
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
-    #scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=1.2, last_epoch=20)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer,0.001, epochs=50, steps_per_epoch=len(train_loader))
-    # scheduler_3 = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda epoch: 1.1*epoch, last_epoch=100)
-    # scheduler_2 = CosineWarmupScheduler(optimizer=optimizer, warmup=100, max_iters=2000)
-    #scheduler_1 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-    #    optimizer = optimizer,
-    #    T_0 = 20,
-    #)
-    #scheduler = torch.optim.lr_scheduler.ChainedScheduler([scheduler_4])
     t_epoch = TrackerEpoch(50)
     t_val_loss = TrackerLoss(10, model)
     t_train_loss = TrackerLoss(-1, model)
@@ -293,6 +285,8 @@ def main() -> None:
     train_console_plot = TransformerLossConsolePlotter("Train")
     eval_console_plot = TransformerLossConsolePlotter("Eval")
     writer_loop_size = 50
+    train_plotter = TransformerForecastPlotter("train", WORKING_DIR, plot_interval=5)
+    eval_plotter = TransformerForecastPlotter("eval", WORKING_DIR, plot_interval=2)
 
     # Load checkpoint
     if isResumed:
@@ -365,8 +359,9 @@ def main() -> None:
 
 
                     # Tensorboard
-                    #writer.add_scalars("Train-prediction", {"truth": torch.flatten(raw_tgt_y[:,0]), "forecast": torch.flatten(prediction[:,0])}, t_epoch.epoch())
+                    train_plotter.append(raw_tgt_y, prediction)
                     if batch_cnt % writer_loop_size == 0:
+                        train_plotter.signal_new_dataloader()
                         normalized_train_loss = train_loss / writer_loop_size
                         train_console_plot.append(normalized_train_loss)
                         train_console_plot.do_a_plot()
@@ -411,7 +406,7 @@ def main() -> None:
                             loss = loss_fn(prediction, raw_tgt_y)
                             prediction = torch.argmax(prediction, dim=1)
                             for additional_monitor in metrics:
-                                additional_loss[str(type(additional_monitor))] += additional_monitor(prediction, raw_tgt_y).item()
+                                additional_loss[str(type(additional_monitor))] += additional_monitor(prediction, raw_tgt_y.to(torch.float)).item()
                             _correct = (prediction == raw_tgt_y).sum().item() / (HYPERPARAMETER["batch_size"] * HYPERPARAMETER["knowledge_length"])
 
                         # CPU part
@@ -422,8 +417,9 @@ def main() -> None:
                         epoch_correct += _correct 
 
                         # Tensorboard
-                        # writer.add_scalars("Eval-prediction", {"truth": torch.flatten(raw_tgt_y[:,0]), "forecast": torch.flatten(prediction[:,0])}, t_epoch.epoch())
+                        eval_plotter.append(raw_tgt_y, prediction)
                         if batch_cnt % writer_loop_size == 0:
+                            eval_plotter.signal_new_dataloader()
                             normalized_val_loss = val_loss / writer_loop_size
                             eval_console_plot.append(normalized_val_loss)
                             eval_console_plot.do_a_plot()
@@ -459,6 +455,8 @@ def main() -> None:
                 #-------------#
                 train_console_plot.signal_new_epoch()
                 eval_console_plot.signal_new_epoch()
+                train_plotter.signal_new_epoch()
+                eval_plotter.signal_new_epoch()
                 if not t_val_loss.check(val_loss, model):
                     tqdm.write(colored("Validation loss no longer decrease, finish training", "green", "on_red"))
                     break
@@ -474,6 +472,8 @@ def main() -> None:
                 break
         epoch_bar.close()
     #profiler.stop()
+    train_plotter.signal_finished()
+    eval_plotter.signal_finished()
 
     writer.close()
 
