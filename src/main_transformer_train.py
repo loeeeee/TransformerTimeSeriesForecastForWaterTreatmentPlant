@@ -115,10 +115,10 @@ HYPERPARAMETER = {
     "tgt_columns":                  TGT_COLUMNS,
     "tgt_y_columns":                TGT_COLUMNS,
     "random_seed":                  42,
-    "encoder_layer_cnt":            8,
-    "decoder_layer_cnt":            8,
-    "average_last_n_decoder_output":4,
-    "word_embedding_size":          512,
+    "encoder_layer_cnt":            2,
+    "decoder_layer_cnt":            3,
+    "average_last_n_decoder_output":2,
+    "word_embedding_size":          256,
     "decoder_layer_head_cnt":       4,
     "encoder_layer_head_cnt":       4,
 }
@@ -233,8 +233,10 @@ def main() -> None:
         )
         return loader
     
-    train_loader = dataframe_to_loader(data.head(train_size))
-    val_loader = dataframe_to_loader(data.tail(val_size))
+    train_data = pd.concat([data[:int(train_size/2)], data[int(train_size/2)+val_size:]])
+    val_data = data[int(train_size/2):int(train_size/2)+val_size]
+    train_loader = dataframe_to_loader(train_data)
+    val_loader = dataframe_to_loader(val_data)
     
     # Model
     model: WaterFormer = WaterFormer(
@@ -260,17 +262,18 @@ def main() -> None:
     mae = nn.L1Loss()
     metrics.append(mae)
     ## Optimizer
-    lr = 0.000000001  # learning rate
+    lr = 0.0000001  # learning rate
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 5.0, gamma=0.995)
-    scheduler_3 = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda epoch: 1.1*epoch, last_epoch=100)
+    #scheduler_0 = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=1.2, last_epoch=20)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer,0.001, epochs=50, steps_per_epoch=len(train_loader))
+    # scheduler_3 = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda epoch: 1.1*epoch, last_epoch=100)
     # scheduler_2 = CosineWarmupScheduler(optimizer=optimizer, warmup=100, max_iters=2000)
-    scheduler_1 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer = optimizer,
-        T_0 = 20,
-    )
-    scheduler = torch.optim.lr_scheduler.ChainedScheduler([scheduler_3, scheduler_0])
-    t_epoch = TrackerEpoch(200)
+    #scheduler_1 = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    #    optimizer = optimizer,
+    #    T_0 = 20,
+    #)
+    #scheduler = torch.optim.lr_scheduler.ChainedScheduler([scheduler_4])
+    t_epoch = TrackerEpoch(50)
     t_val_loss = TrackerLoss(10, model)
     t_train_loss = TrackerLoss(-1, model)
     print(colored("Training:", "black", "on_green"), "\n")
@@ -302,7 +305,7 @@ def main() -> None:
                 lr = scheduler.get_last_lr()[0]
                 tqdm.write(colored("--------------------------------------------", "cyan", attrs=["bold"]))
                 tqdm.write(colored(f"Epoch {t_epoch.epoch()}", "green"))
-                tqdm.write(colored(f"Learning rate {lr:.5f}", "green"))
+                tqdm.write(colored(f"Learning rate {lr:.8f}", "green"))
                 tqdm.write(colored(f"Recent training loss trend: {t_train_loss.get_trend(3):.5f}", "green"))
                 tqdm.write(colored(f"Recent validation loss trend: {t_val_loss.get_trend(3):.5f}", "green"))
                 tqdm.write(colored(f"Best training loss: {t_train_loss.lowest_loss:.5f}", "green"))
@@ -326,7 +329,7 @@ def main() -> None:
                 correct = 0
 
                 # Iterate through dataloaders
-                for batch_cnt, (src, tgt, hot_tgt_y, raw_tgt_y) in enumerate(train_loader, start=1):
+                for batch_cnt, (src, tgt, raw_tgt_y) in enumerate(train_loader, start=1):
                     memory_mask = generate_square_subsequent_mask(
                         dim1=tgt.size(1),
                         dim2=src.size(1),
@@ -345,9 +348,9 @@ def main() -> None:
                         # Make forecasts
                         prediction = model(src, tgt, memory_mask=memory_mask, tgt_mask=tgt_mask)
                         # Compute and backprop loss
-                        loss = loss_fn(prediction, hot_tgt_y)
-                        prediction = torch.argmax(prediction, dim=2)
-                        correct += (prediction == raw_tgt_y).sum().item()
+                        loss = loss_fn(prediction, raw_tgt_y)
+                        prediction = torch.argmax(prediction, dim=1)
+                        correct += (prediction == raw_tgt_y).sum().item() / (HYPERPARAMETER["batch_size"] * HYPERPARAMETER["knowledge_length"])
 
                     # Backward
                     loss.backward()
@@ -362,13 +365,14 @@ def main() -> None:
 
 
                     # Tensorboard
+                    #writer.add_scalars("Train-prediction", {"truth": torch.flatten(raw_tgt_y[:,0]), "forecast": torch.flatten(prediction[:,0])}, t_epoch.epoch())
                     if batch_cnt % writer_loop_size == 0:
                         normalized_train_loss = train_loss / writer_loop_size
                         train_console_plot.append(normalized_train_loss)
                         train_console_plot.do_a_plot()
                         writer.add_scalar("Train-loss", normalized_train_loss, t_epoch.epoch())
                         train_loss = 0
-                        writer.add_scalar("Eval-correct", correct / (writer_loop_size * HYPERPARAMETER["knowledge_length"]) * 100, t_epoch.epoch())
+                        writer.add_scalar("Train-correct", correct / writer_loop_size * 100, t_epoch.epoch())
                         correct = 0
 
                     bar.set_description(desc=f"Instant loss: {batch_loss:.3f}", refresh=True)
@@ -391,7 +395,6 @@ def main() -> None:
                     additional_loss[str(type(additional_monitor))] = 0
                 
                 # Validation
-                _correct = 0
                 correct = 0
                 epoch_correct = 0
                 val_loss = 0
@@ -402,30 +405,31 @@ def main() -> None:
                     colour      = GREEN,
                     )
                 with torch.no_grad():
-                    for batch_cnt, (src, tgt, hot_tgt_y, raw_tgt_y) in enumerate(val_loader, start=1):
+                    for batch_cnt, (src, tgt, raw_tgt_y) in enumerate(val_loader, start=1):
                         with torch.autocast(device_type=DEVICE):
                             prediction = model(src, tgt)
-                            loss = loss_fn(prediction, hot_tgt_y)
+                            loss = loss_fn(prediction, raw_tgt_y)
+                            prediction = torch.argmax(prediction, dim=1)
                             for additional_monitor in metrics:
-                                additional_loss[str(type(additional_monitor))] += additional_monitor(prediction, hot_tgt_y).item()
-                            prediction = torch.argmax(prediction, dim=2)
-                            _correct += (prediction == raw_tgt_y).sum().item()
+                                additional_loss[str(type(additional_monitor))] += additional_monitor(prediction, raw_tgt_y).item()
+                            _correct = (prediction == raw_tgt_y).sum().item() / (HYPERPARAMETER["batch_size"] * HYPERPARAMETER["knowledge_length"])
 
                         # CPU part
                         batch_loss = loss.item() / HYPERPARAMETER["knowledge_length"]
                         val_loss += batch_loss
                         epoch_val_loss += batch_loss
-                        correct += _correct
-                        epoch_correct += _correct
+                        correct += _correct 
+                        epoch_correct += _correct 
 
                         # Tensorboard
+                        # writer.add_scalars("Eval-prediction", {"truth": torch.flatten(raw_tgt_y[:,0]), "forecast": torch.flatten(prediction[:,0])}, t_epoch.epoch())
                         if batch_cnt % writer_loop_size == 0:
                             normalized_val_loss = val_loss / writer_loop_size
                             eval_console_plot.append(normalized_val_loss)
                             eval_console_plot.do_a_plot()
                             writer.add_scalar("Eval-loss", normalized_val_loss, t_epoch.epoch())
                             val_loss = 0
-                            writer.add_scalar("Eval-correct", correct / (writer_loop_size * HYPERPARAMETER["knowledge_length"]) * 100, t_epoch.epoch())
+                            writer.add_scalar("Eval-correct", correct / writer_loop_size * 100, t_epoch.epoch())
                             correct = 0
 
                         bar.update()
@@ -433,7 +437,7 @@ def main() -> None:
                 bar.colour = BLACK
                 bar.close()
                 val_loss /= total_batch
-                epoch_correct /= fg * writer_loop_size * HYPERPARAMETER["knowledge_length"]
+                epoch_correct /= total_batch
                 
                 # Report
                 tqdm.write(f"Test Error: \n Accuracy: {(100*epoch_correct):>0.1f}%, Avg loss: {epoch_val_loss:>8f} ")

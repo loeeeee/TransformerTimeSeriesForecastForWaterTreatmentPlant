@@ -18,6 +18,7 @@ from helper import create_folder_if_not_exists
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from flash_attn import flash_attn_qkvpacked_func, flash_attn_func
 
 GREEN = "#00af34"
 BLACK = "#ffffff"
@@ -1278,6 +1279,11 @@ class WaterFormer(nn.Module):
         ## Shape is changed to
         ## [batch_size, input_sequence_size, dict_size]
         result = self.output_dense_layer(average)
+
+        # For Cross Entropy calculation
+        ## Shape is changed to 
+        ## [batch_size, dict_size, input_sequence_size]
+        result = torch.permute(result, (0, 2, 1))
         return result
 
     def dump_hyperparameter(self, working_dir: str) -> None:
@@ -1341,11 +1347,11 @@ def transformer_collate_fn(data):
             ...
         ]
     """
-    result = [[], [], [], []]
-    for i in range(4):
+    result = [[], [], []]
+    for i in range(3):
         result[i] = [temp[i] for temp in data]
         result[i] = torch.stack(result[i])
-    return result[0], result[1], result[2], result[3]
+    return result[0], result[1], result[2]
 
 
 class WaterFormerDataset(torch.utils.data.Dataset):
@@ -1463,7 +1469,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             word,
         ]
         """
-        hot_tgt_y = torch.nn.functional.one_hot(raw_tgt_y, num_classes=self.dict_size).to(dtype=torch.float32, device=self.device)
+        # hot_tgt_y = torch.nn.functional.one_hot(raw_tgt_y, num_classes=self.dict_size).to(dtype=torch.float32, device=self.device)
         """tgt_y
         [
             [one_hot],
@@ -1472,7 +1478,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             [one_hot],
         ]
         """
-        return (src, tgt, hot_tgt_y, raw_tgt_y)
+        return src, tgt, raw_tgt_y
     
     @staticmethod
     def _convert_timestamp(timestamp: Union[list, np.array]):
