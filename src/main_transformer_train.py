@@ -4,7 +4,8 @@ This transformer code works on the fully normalized input, and multiply the loss
 import settings # Get config
 
 from helper import *
-from transformer import WaterFormer, TransformerLossConsolePlotter, WaterFormerDataset, transformer_collate_fn, generate_square_subsequent_mask, GREEN, BLACK, TransformerForecastPlotter
+from transformer import WaterFormer, TransformerLossConsolePlotter, WaterFormerDataset, transformer_collate_fn,\
+    generate_square_subsequent_mask, GREEN, BLACK, TransformerForecastPlotter
 
 import torch
 from torch import nn
@@ -105,9 +106,9 @@ def load_pump_dictionary() -> dict:
 
 # HYPERPARAMETER
 HYPERPARAMETER = {
-    "knowledge_length":             32,    
+    "knowledge_length":             8,    
     "spatiotemporal_encoding_size": None,  # Generated on the fly
-    "batch_size":                   64,    # 32 is pretty small
+    "batch_size":                   512,    # 32 is pretty small
     "train_val_split_ratio":        0.7,
     "scaled_national_standards":    load_scaled_national_standards(),
     "pump_dictionary":              load_pump_dictionary(),
@@ -115,12 +116,12 @@ HYPERPARAMETER = {
     "tgt_columns":                  TGT_COLUMNS,
     "tgt_y_columns":                TGT_COLUMNS,
     "random_seed":                  42,
-    "encoder_layer_cnt":            8,
-    "decoder_layer_cnt":            8,
-    "average_last_n_decoder_output":4,
-    "word_embedding_size":          256,
-    "decoder_layer_head_cnt":       4,
-    "encoder_layer_head_cnt":       4,
+    "encoder_layer_cnt":            4,
+    "decoder_layer_cnt":            4,
+    "average_last_n_decoder_output":2,
+    "word_embedding_size":          512,
+    "decoder_layer_head_cnt":       8,
+    "encoder_layer_head_cnt":       8,
 }
 
 INPUT_FEATURE_SIZE = len(HYPERPARAMETER["src_columns"])
@@ -260,12 +261,14 @@ def main() -> None:
     ## Additional monitoring
     metrics = []
     mae = nn.L1Loss()
+    mse = nn.MSELoss()
     metrics.append(mae)
+    metrics.append(mse)
     ## Optimizer
     lr = 0.0000001  # learning rate
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer,0.001, epochs=50, steps_per_epoch=len(train_loader))
-    t_epoch = TrackerEpoch(50)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer,0.001, epochs=200, steps_per_epoch=len(train_loader))
+    t_epoch = TrackerEpoch(200)
     t_val_loss = TrackerLoss(10, model)
     t_train_loss = TrackerLoss(-1, model)
     print(colored("Training:", "black", "on_green"), "\n")
@@ -284,7 +287,6 @@ def main() -> None:
     ## Visualizer
     train_console_plot = TransformerLossConsolePlotter("Train")
     eval_console_plot = TransformerLossConsolePlotter("Eval")
-    writer_loop_size = 50
     train_plotter = TransformerForecastPlotter("train", WORKING_DIR, plot_interval=5)
     eval_plotter = TransformerForecastPlotter("eval", WORKING_DIR, plot_interval=2)
 
@@ -306,101 +308,39 @@ def main() -> None:
                 tqdm.write(colored(f"Best validation loss: {t_val_loss.lowest_loss:.5f}", "green"))
                 tqdm.write(colored("--------------------------------------------", "cyan", attrs=["bold"]))
 
-                #---------#
-                #--Train--#
-                #---------#
-                # Model enters training mode
-                model.train()
+                def learn(
+                        model: WaterFormer, 
+                        optimizer: torch.optim.Optimizer, 
+                        scheduler: torch.optim.lr_scheduler._LRScheduler, 
+                        loss_fn: torch.nn.CrossEntropyLoss, 
+                        loader, 
+                        metrics: list,
+                        epoch_cnt: int,
+                        ) -> float:
+                    #---------#
+                    #--Train--#
+                    #---------#
+                    # Model enters training mode
+                    model.train()
 
-                # Metadata
-                total_batch = len(train_loader)
-                bar = tqdm(
-                    total       = total_batch, 
-                    position    = 1,
-                    colour      = GREEN,
-                    )
-                train_loss = 0
-                correct = 0
+                    # Metadata
+                    total_batch = len(loader)
+                    writer_loop_size = int(total_batch/20)
+                    bar = tqdm(
+                        total       = total_batch, 
+                        position    = 1,
+                        colour      = GREEN,
+                        )
+                    correct = 0
+                    epoch_correct = 0
+                    epoch_train_loss = 0
 
-                # Iterate through dataloaders
-                for batch_cnt, (src, tgt, raw_tgt_y) in enumerate(train_loader, start=1):
-                    memory_mask = generate_square_subsequent_mask(
-                        dim1=tgt.size(1),
-                        dim2=src.size(1),
-                        device=DEVICE,
-                    )
-                    tgt_mask = generate_square_subsequent_mask(
-                        dim1=tgt.size(1),
-                        dim2=tgt.size(1),
-                        device=DEVICE,
-                    )
+                    additional_loss = {}
+                    for additional_monitor in metrics:
+                        additional_loss[str(type(additional_monitor))] = 0
 
-                    # zero the parameter gradients
-                    model.zero_grad(set_to_none=True)
-                    # Forward
-                    with torch.autocast(device_type=DEVICE):
-                        # Make forecasts
-                        prediction = model(src, tgt, memory_mask=memory_mask, tgt_mask=tgt_mask)
-                        # Compute and backprop loss
-                        loss = loss_fn(prediction, raw_tgt_y)
-                        prediction = torch.argmax(prediction, dim=1)
-                        correct += (prediction == raw_tgt_y).sum().item() / (HYPERPARAMETER["batch_size"] * HYPERPARAMETER["knowledge_length"])
-
-                    # Backward
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-
-                    # Take optimizer step
-                    optimizer.step()
-
-                    # CPU
-                    batch_loss = loss.item() / HYPERPARAMETER["knowledge_length"]
-                    train_loss += batch_loss
-
-
-                    # Tensorboard
-                    train_plotter.append(raw_tgt_y, prediction)
-                    if batch_cnt % writer_loop_size == 0:
-                        train_plotter.signal_new_dataloader()
-                        normalized_train_loss = train_loss / writer_loop_size
-                        train_console_plot.append(normalized_train_loss)
-                        train_console_plot.do_a_plot()
-                        writer.add_scalar("Train-loss", normalized_train_loss, t_epoch.epoch())
-                        train_loss = 0
-                        writer.add_scalar("Train-correct", correct / writer_loop_size * 100, t_epoch.epoch())
-                        correct = 0
-
-                    bar.set_description(desc=f"Instant loss: {batch_loss:.3f}", refresh=True)
-                    bar.update()
-                bar.colour = BLACK
-                bar.close()
-
-                scheduler.step()
-                #--------------#
-                #--Evaluation--#
-                #--------------#
-                # Metadata 
-                total_batch = len(val_loader)
-
-                # Start evaluation
-                model.eval()
-
-                additional_loss = {}
-                for additional_monitor in metrics:
-                    additional_loss[str(type(additional_monitor))] = 0
-                
-                # Validation
-                correct = 0
-                epoch_correct = 0
-                val_loss = 0
-                epoch_val_loss = 0
-                bar = tqdm(
-                    total       = total_batch, 
-                    position    = 1,
-                    colour      = GREEN,
-                    )
-                with torch.no_grad():
-                    for batch_cnt, (src, tgt, raw_tgt_y) in enumerate(val_loader, start=1):
+                    # Iterate through dataloaders
+                    for batch_cnt, (src, tgt, raw_tgt_y) in enumerate(loader, start=1):
                         memory_mask = generate_square_subsequent_mask(
                             dim1=tgt.size(1),
                             dim2=src.size(1),
@@ -411,47 +351,155 @@ def main() -> None:
                             dim2=tgt.size(1),
                             device=DEVICE,
                         )
+
+                        # zero the parameter gradients
+                        model.zero_grad(set_to_none=True)
+                        # Forward
                         with torch.autocast(device_type=DEVICE):
+                            # Make forecasts
                             prediction = model(src, tgt, memory_mask=memory_mask, tgt_mask=tgt_mask)
+                            # Compute and backprop loss
                             loss = loss_fn(prediction, raw_tgt_y)
                             prediction = torch.argmax(prediction, dim=1)
+                            _correct = (prediction == raw_tgt_y).sum().item() /\
+                                 (HYPERPARAMETER["batch_size"] * HYPERPARAMETER["knowledge_length"])
                             for additional_monitor in metrics:
-                                additional_loss[str(type(additional_monitor))] += additional_monitor(prediction, raw_tgt_y.to(torch.float)).item()
-                            _correct = (prediction == raw_tgt_y).sum().item() / (HYPERPARAMETER["batch_size"] * HYPERPARAMETER["knowledge_length"])
+                                    additional_loss[str(type(additional_monitor))] += \
+                                        (additional_monitor(prediction, raw_tgt_y.to(torch.float)).item()) /\
+                                             (HYPERPARAMETER["batch_size"] * HYPERPARAMETER["knowledge_length"])
 
-                        # CPU part
+                        # Backward
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+
+                        # Take optimizer step
+                        optimizer.step()
+
+                        # CPU
                         batch_loss = loss.item() / HYPERPARAMETER["knowledge_length"]
-                        val_loss += batch_loss
-                        epoch_val_loss += batch_loss
-                        correct += _correct 
-                        epoch_correct += _correct 
+                        epoch_train_loss += batch_loss
+                        correct += _correct
+                        epoch_correct += _correct
 
-                        # Tensorboard
-                        eval_plotter.append(raw_tgt_y, prediction)
+                        # Plotter
+                        train_plotter.append(raw_tgt_y, prediction)
                         if batch_cnt % writer_loop_size == 0:
-                            eval_plotter.signal_new_dataloader()
-                            normalized_val_loss = val_loss / writer_loop_size
-                            eval_console_plot.append(normalized_val_loss)
-                            eval_console_plot.do_a_plot()
-                            writer.add_scalar("Eval-loss", normalized_val_loss, t_epoch.epoch())
-                            val_loss = 0
-                            writer.add_scalar("Eval-correct", correct / writer_loop_size * 100, t_epoch.epoch())
+                            train_plotter.signal_new_dataloader()
+                            normalized_correct = correct / writer_loop_size * 100
                             correct = 0
+                            train_console_plot.append(normalized_correct)
+                            train_console_plot.do_a_plot()
 
+                        scheduler.step()
+                        bar.set_description(desc=f"Instant loss: {batch_loss:.3f} LR: {scheduler.get_last_lr()[0]:.8f}", refresh=True)
                         bar.update()
-                        bar.set_description(desc=f"Loss: {batch_loss:.3f}", refresh=True)
-                bar.colour = BLACK
-                bar.close()
-                val_loss /= total_batch
-                epoch_correct /= total_batch
+                    bar.colour = BLACK
+                    bar.close()
+                    
+                    # Report 1
+                    epoch_correct /= total_batch
+                    epoch_train_loss /= total_batch
+                    tqdm.write(f"Train Error: \n Accuracy: {(100*epoch_correct):>0.1f}%, Avg loss: {epoch_train_loss:>8f} ")
+                    writer.add_scalar("Train-loss", epoch_train_loss, global_step=epoch_cnt)
+                    writer.add_scalar("Train-correct", epoch_correct * 100, global_step=epoch_cnt)
+                    for additional_monitor in metrics:
+                        name = str(type(additional_monitor))[8:-2].split(".")[-1]
+                        loss = additional_loss[str(type(additional_monitor))] / total_batch
+                        tqdm.write(f" {name}: {loss:>8f}")
+                        writer.add_scalar(f"Train-{name}", loss, global_step=epoch_cnt)
+                    return epoch_train_loss
                 
-                # Report
-                tqdm.write(f"Test Error: \n Accuracy: {(100*epoch_correct):>0.1f}%, Avg loss: {epoch_val_loss:>8f} ")
-                for additional_monitor in metrics:
-                    name = str(type(additional_monitor))[8:-2].split(".")[-1]
-                    loss = additional_loss[str(type(additional_monitor))] / total_batch
-                    tqdm.write(f" {name}: {loss:>8f}")
+                train_loss = learn(model, optimizer, scheduler, loss_fn, train_loader, metrics, t_epoch.epoch())
+
+                def eval(
+                        model: WaterFormer, 
+                        loss_fn: torch.nn.CrossEntropyLoss, 
+                        loader, 
+                        metrics: list,
+                        epoch_cnt: int,
+                        ) -> float:
+                    #--------------#
+                    #--Evaluation--#
+                    #--------------#
+                    # Metadata 
+                    total_batch = len(loader)
+                    writer_loop_size = int(total_batch/5)
+
+                    # Start evaluation
+                    model.eval()
+
+                    additional_loss = {}
+                    for additional_monitor in metrics:
+                        additional_loss[str(type(additional_monitor))] = 0
+
+                    # Validation
+                    correct = 0
+                    epoch_correct = 0
+                    epoch_val_loss = 0
+                    bar = tqdm(
+                        total       = total_batch, 
+                        position    = 1,
+                        colour      = GREEN,
+                        )
+                    with torch.no_grad():
+                        for batch_cnt, (src, tgt, raw_tgt_y) in enumerate(loader, start=1):
+                            memory_mask = generate_square_subsequent_mask(
+                                dim1=tgt.size(1),
+                                dim2=src.size(1),
+                                device=DEVICE,
+                            )
+                            tgt_mask = generate_square_subsequent_mask(
+                                dim1=tgt.size(1),
+                                dim2=tgt.size(1),
+                                device=DEVICE,
+                            )
+                            with torch.autocast(device_type=DEVICE):
+                                prediction = model(src, tgt, memory_mask=memory_mask, tgt_mask=tgt_mask)
+                                loss = loss_fn(prediction, raw_tgt_y)
+                                prediction = torch.argmax(prediction, dim=1)
+                                for additional_monitor in metrics:
+                                    additional_loss[str(type(additional_monitor))] += \
+                                        additional_monitor(prediction, raw_tgt_y.to(torch.float)).item() /\
+                                    (HYPERPARAMETER["batch_size"] * HYPERPARAMETER["knowledge_length"])
+                                _correct = (prediction == raw_tgt_y).sum().item() /\
+                                    (HYPERPARAMETER["batch_size"] * HYPERPARAMETER["knowledge_length"])
+
+                            # CPU part
+                            batch_loss = loss.item() / HYPERPARAMETER["knowledge_length"]
+                            epoch_val_loss += batch_loss
+                            correct += _correct 
+                            epoch_correct += _correct 
+
+                            # Tensorboard
+                            eval_plotter.append(raw_tgt_y, prediction)
+                            if batch_cnt % writer_loop_size == 0:
+                                eval_plotter.signal_new_dataloader()
+                                normalized_correct = correct / writer_loop_size * 100
+                                eval_console_plot.append(normalized_correct)
+                                eval_console_plot.do_a_plot()
+                                correct = 0
+
+                            bar.update()
+                            bar.set_description(desc=f"Loss: {batch_loss:.3f}", refresh=True)
+                    bar.colour = BLACK
+                    bar.close()
+                    epoch_correct /= total_batch
+                    epoch_val_loss /= total_batch
+
+                    # Report 2
+                    tqdm.write(f"Test Error: \n Accuracy: {(100*epoch_correct):>0.1f}%, Avg loss: {epoch_val_loss:>8f} ")
+                    writer.add_scalar("Eval-loss", epoch_val_loss, global_step=epoch_cnt)
+                    writer.add_scalar("Eval-correct", epoch_correct * 100, global_step=epoch_cnt)
+                    for additional_monitor in metrics:
+                        name = str(type(additional_monitor))[8:-2].split(".")[-1]
+                        loss = additional_loss[str(type(additional_monitor))] / total_batch
+                        tqdm.write(f" {name}: {loss:>8f}")
+                        writer.add_scalar(f"Eval-{name}", loss, global_step=epoch_cnt)
+
+                    return epoch_val_loss
                 
+                val_loss = eval(model, loss_fn, val_loader, metrics, t_epoch.epoch())
+
                 # Checkpoint
                 if t_epoch.epoch() % 10 == 0:
                     save_checkpoint(

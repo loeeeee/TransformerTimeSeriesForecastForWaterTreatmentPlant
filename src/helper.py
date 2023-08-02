@@ -187,11 +187,12 @@ def load_data(path, name) -> pd.DataFrame:
 
     return data
 
-def save_model(model: nn.Module, root_saving_dir: str, dataloader, device: str) -> None:
+def save_model(model: nn.Module, root_saving_dir: str, dataloader, device: str="cpu") -> None:
     print(f"Save data to {root_saving_dir}")
     save_dir = os.path.join(root_saving_dir, f"{model.name}.onnx")
     example_input = next(iter(dataloader))
     args = (example_input[0].to(device=device), example_input[1].to(device=device))
+    model.to(device=device)
     model.eval()
     scripted = torch.jit.trace(model.forward, example_inputs=args, check_trace=False) # HACK
     torch.onnx.export(

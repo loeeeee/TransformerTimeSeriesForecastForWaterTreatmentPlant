@@ -1016,7 +1016,7 @@ class WaterFormer(nn.Module):
         self._init_weights()
         
     def _init_weights(self) -> None:
-        init_range = 23
+        init_range = 2
         self.input_embedding.weight.data.uniform_(-init_range, init_range)
         self.output_dense_layer.bias.data.zero_()
         self.output_dense_layer.weight.data.uniform_(-init_range, init_range)
@@ -1258,6 +1258,8 @@ class WaterFormerDataset(torch.utils.data.Dataset):
 
         # Note the spatiotemporal_encoding_size
         self.spatiotemporal_encoding_size = self.src.shape[1]
+        self.end_of_sentence = torch.randn((1, self.spatiotemporal_encoding_size), device=self.device)
+        self.start_of_sentence = torch.randn((1))
 
     def __len__(self) -> int:
         """Get the length of current dataset
@@ -1280,7 +1282,9 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         src_offset_index = index * self.src_feature_length + self.knowledge_length * self.src_feature_length
         tgt_offset_index = index * self.tgt_feature_length + self.knowledge_length * self.tgt_feature_length
         src = torch.tensor(self.src[src_offset_index - self.knowledge_length * self.src_feature_length: src_offset_index], device=self.device)
+        # src = torch.concat([src, self.end_of_sentence])
         tgt = torch.tensor(self.tgt[tgt_offset_index - self.knowledge_length * self.tgt_feature_length: tgt_offset_index], device=self.device)
+        # tgt = torch.concat([tgt, self.end_of_sentence])
         """tgt
         [
             [encode],
@@ -1288,6 +1292,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         ]
         """
         raw_tgt_y = torch.tensor(self.tgt_y[tgt_offset_index - self.knowledge_length * self.tgt_feature_length + 1: tgt_offset_index + 1]).type(torch.LongTensor).to(device=self.device)
+        # raw_tgt_y = torch.concat([self.start_of_sentence, raw_tgt_y])
         """tgt_y
         [
             word,
