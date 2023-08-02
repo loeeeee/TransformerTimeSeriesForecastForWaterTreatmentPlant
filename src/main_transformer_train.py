@@ -105,9 +105,9 @@ def load_pump_dictionary() -> dict:
 
 # HYPERPARAMETER
 HYPERPARAMETER = {
-    "knowledge_length":             64,    
+    "knowledge_length":             32,    
     "spatiotemporal_encoding_size": None,  # Generated on the fly
-    "batch_size":                   128,    # 32 is pretty small
+    "batch_size":                   64,    # 32 is pretty small
     "train_val_split_ratio":        0.7,
     "scaled_national_standards":    load_scaled_national_standards(),
     "pump_dictionary":              load_pump_dictionary(),
@@ -115,9 +115,9 @@ HYPERPARAMETER = {
     "tgt_columns":                  TGT_COLUMNS,
     "tgt_y_columns":                TGT_COLUMNS,
     "random_seed":                  42,
-    "encoder_layer_cnt":            2,
-    "decoder_layer_cnt":            3,
-    "average_last_n_decoder_output":2,
+    "encoder_layer_cnt":            8,
+    "decoder_layer_cnt":            8,
+    "average_last_n_decoder_output":4,
     "word_embedding_size":          256,
     "decoder_layer_head_cnt":       4,
     "encoder_layer_head_cnt":       4,
@@ -401,8 +401,18 @@ def main() -> None:
                     )
                 with torch.no_grad():
                     for batch_cnt, (src, tgt, raw_tgt_y) in enumerate(val_loader, start=1):
+                        memory_mask = generate_square_subsequent_mask(
+                            dim1=tgt.size(1),
+                            dim2=src.size(1),
+                            device=DEVICE,
+                        )
+                        tgt_mask = generate_square_subsequent_mask(
+                            dim1=tgt.size(1),
+                            dim2=tgt.size(1),
+                            device=DEVICE,
+                        )
                         with torch.autocast(device_type=DEVICE):
-                            prediction = model(src, tgt)
+                            prediction = model(src, tgt, memory_mask=memory_mask, tgt_mask=tgt_mask)
                             loss = loss_fn(prediction, raw_tgt_y)
                             prediction = torch.argmax(prediction, dim=1)
                             for additional_monitor in metrics:
