@@ -1,86 +1,92 @@
 from __future__ import annotations
 
-import os
-import math
 import json
+import math
+import os
 import random
+from typing import Any, List, Optional, Tuple, Union
 
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import torch
-from torch import nn
-
-from tqdm import tqdm
+import uniplot.layer_assembly as layer_assembly
+import uniplot.plot_elements as elements
+from flash_attn import flash_attn_func, flash_attn_qkvpacked_func
 from numpy.typing import NDArray
 from termcolor import colored, cprint
+from torch import nn
+from tqdm import tqdm
 from tqdm.utils import _term_move_up
-from typing import Tuple, Union, Optional, Any, List
-from helper import create_folder_if_not_exists
+from uniplot.axis_labels.extended_talbot_labels import extended_talbot_labels
+from uniplot.getch import getch
+from uniplot.multi_series import MultiSeries
+from uniplot.options import Options
+from uniplot.param_initializer import validate_and_transform_options
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from flash_attn import flash_attn_qkvpacked_func, flash_attn_func
+from helper import create_folder_if_not_exists
 
 GREEN = "#00af34"
 BLACK = "#ffffff"
 
+
 class NotEnoughData(Exception):
-    def __init__(self):            
+    def __init__(self):
         # Call the base class constructor with the parameters it needs
         super().__init__("Not enough data")
 
 
 def run_encoder_decoder_inference(
-    model: nn.Module, 
-    src: torch.Tensor, 
+    model: nn.Module,
+    src: torch.Tensor,
     forecast_window: int,
     batch_size: int,
     device,
-    batch_first: bool=False
-    ) -> torch.Tensor:
-
+    batch_first: bool = False
+) -> torch.Tensor:
     """
     NB! This function is currently only tested on models that work with 
     batch_first = False
-    
+
     This function is for encoder-decoder type models in which the decoder requires
     an input, tgt, which - during training - is the target sequence. During inference,
     the values of tgt are unknown, and the values therefore have to be generated
     iteratively.  
-    
+
     This function returns a prediction of length forecast_window for each batch in src
-    
+
     NB! If you want the inference to be done without gradient calculation, 
     make sure to call this function inside the context manager torch.no_grad like:
     with torch.no_grad:
         run_encoder_decoder_inference()
-        
+
     The context manager is intentionally not called inside this function to make
     it usable in cases where the function is used to compute loss that must be 
     backpropagated during training and gradient calculation hence is required.
-    
+
     If use_predicted_tgt = True:
     To begin with, tgt is equal to the last value of src. Then, the last element
     in the model's prediction is iteratively concatenated with tgt, such that 
     at each step in the for-loop, tgt's size increases by 1. Finally, tgt will
     have the correct length (target sequence length) and the final prediction
     will be produced and returned.
-    
+
     Args:
         model: An encoder-decoder type model where the decoder requires
                target values as input. Should be set to evaluation mode before 
                passed to this function.
-               
+
         src: The input to the model
-        
+
         forecast_horizon: The desired length of the model's output, e.g. 58 if you
                          want to predict the next 58 hours of FCR prices.
-                           
+
         batch_size: batch size
-        
+
         batch_first: If true, the shape of the model input should be 
                      [batch size, input sequence length, number of features].
                      If false, [input sequence length, batch size, number of features]
-    
+
     """
 
     # Dimension of a batched model input that contains the target sequence values
@@ -88,11 +94,12 @@ def run_encoder_decoder_inference(
 
     # Take the last value of the target variable in all batches in src and make it tgt
     # as per the Influenza paper
-    tgt = src[-1, :, 0] if batch_first == False else src[:, -1, 0] # shape [1, batch_size, 1]
+    # shape [1, batch_size, 1]
+    tgt = src[-1, :, 0] if batch_first == False else src[:, -1, 0]
 
     # Change shape from [batch_size] to [1, batch_size, 1]
     if batch_size == 1 and batch_first == False:
-        tgt = tgt.unsqueeze(0).unsqueeze(0) # change from [1] to [1, 1, 1]
+        tgt = tgt.unsqueeze(0).unsqueeze(0)  # change from [1] to [1, 1, 1]
 
     # Change shape from [batch_size] to [1, batch_size, 1]
     if batch_first == False and batch_size > 1:
@@ -109,23 +116,23 @@ def run_encoder_decoder_inference(
         tgt_mask = generate_square_subsequent_mask(
             dim1=dim_a,
             dim2=dim_a,
-            ).to(device)
+        ).to(device)
 
         src_mask = generate_square_subsequent_mask(
             dim1=dim_a,
             dim2=dim_b,
-            ).to(device)
+        ).to(device)
 
         # Make prediction
-        prediction = model(src, tgt, src_mask, tgt_mask) 
+        prediction = model(src, tgt, src_mask, tgt_mask)
 
-        # If statement simply makes sure that the predicted value is 
+        # If statement simply makes sure that the predicted value is
         # extracted and reshaped correctly
         if batch_first == False:
 
-            # Obtain the predicted value at t+1 where t is the last time step 
+            # Obtain the predicted value at t+1 where t is the last time step
             # represented in tgt
-            last_predicted_value = prediction[-1, :, :] 
+            last_predicted_value = prediction[-1, :, :]
 
             # Reshape from [batch_size, 1] --> [1, batch_size, 1]
             last_predicted_value = last_predicted_value.unsqueeze(0)
@@ -138,10 +145,10 @@ def run_encoder_decoder_inference(
             # Reshape from [batch_size, 1] --> [batch_size, 1, 1]
             last_predicted_value = last_predicted_value.unsqueeze(-1)
 
-        # Detach the predicted element from the graph and concatenate with 
+        # Detach the predicted element from the graph and concatenate with
         # tgt in dimension 1 or 0
         tgt = torch.cat((tgt, last_predicted_value.detach()), target_seq_dim)
-    
+
     # Create masks
     dim_a = tgt.shape[1] if batch_first == True else tgt.shape[0]
 
@@ -150,19 +157,20 @@ def run_encoder_decoder_inference(
     tgt_mask = generate_square_subsequent_mask(
         dim1=dim_a,
         dim2=dim_a,
-        ).to(device)
+    ).to(device)
 
     src_mask = generate_square_subsequent_mask(
         dim1=dim_a,
         dim2=dim_b,
-        ).to(device)
+    ).to(device)
 
     # Make final prediction
     final_prediction = model(src, tgt, src_mask, tgt_mask)
 
     return final_prediction
 
-def generate_square_subsequent_mask(dim1: int, dim2: int, device: str="cpu") -> torch.Tensor:
+
+def generate_square_subsequent_mask(dim1: int, dim2: int, device: str = "cpu") -> torch.Tensor:
     """
     Generates an upper-triangular matrix of -inf, with zeros on diag.
     Modified from: 
@@ -182,8 +190,11 @@ def generate_square_subsequent_mask(dim1: int, dim2: int, device: str="cpu") -> 
 
         A Tensor of shape [dim1, dim2]
     """
-    result = torch.triu(torch.ones(dim1, dim2) * float('-inf'), diagonal=1).to(device=device, dtype=torch.float32)
+    result = torch.triu(torch.ones(dim1, dim2) * float('-inf'),
+                        diagonal=1).to(device=device, dtype=torch.float32)
     return result
+
+
 """
 
 ██╗   ██╗██╗███████╗██╗   ██╗ █████╗ ██╗     ██╗███████╗███████╗██████╗ 
@@ -198,13 +209,6 @@ def generate_square_subsequent_mask(dim1: int, dim2: int, device: str="cpu") -> 
 The following part is modified from uniplot. Thanks a lot! Uniplot
 """
 
-from uniplot.multi_series import MultiSeries
-from uniplot.options import Options
-import uniplot.layer_assembly as layer_assembly
-import uniplot.plot_elements as elements
-from uniplot.getch import getch
-from uniplot.param_initializer import validate_and_transform_options
-from uniplot.axis_labels.extended_talbot_labels import extended_talbot_labels
 
 def plot(ys: Any, xs: Optional[Any] = None, **kwargs) -> list:
     """
@@ -219,7 +223,8 @@ def plot(ys: Any, xs: Optional[Any] = None, **kwargs) -> list:
     - Any additional keyword arguments are passed to the `uniplot.options.Options` class.
     """
     series: MultiSeries = MultiSeries(xs=xs, ys=ys)
-    options: Options = validate_and_transform_options(series=series, kwargs=kwargs)
+    options: Options = validate_and_transform_options(
+        series=series, kwargs=kwargs)
     # Things to plot
     things_to_plot = []
 
@@ -254,6 +259,7 @@ def plot(ys: Any, xs: Optional[Any] = None, **kwargs) -> list:
             things_to_plot.append(line)
     return things_to_plot
 
+
 def _generate_header(options: Options) -> List[str]:
     """
     Generates the header of the plot, so everything above the first line of plottable area.
@@ -285,7 +291,8 @@ def _generate_body(
 
     # Print legend if labels were specified
     if options.legend_labels is not None:
-        lines.append(elements.legend(options.legend_labels, width=options.width))
+        lines.append(elements.legend(
+            options.legend_labels, width=options.width))
 
     return lines
 
@@ -317,7 +324,8 @@ def _generate_body_raw_elements(
         # Make sure the total plot does not exceed `line_length_hard_cap`
         if 2 + options.width + 1 + max_y_label_length > options.line_length_hard_cap:
             # Overflow, so we need to reduce width of plot area
-            options.width = options.line_length_hard_cap - (2 + 1 + max_y_label_length)
+            options.width = options.line_length_hard_cap - \
+                (2 + 1 + max_y_label_length)
             if options.width < 1:
                 raise
 
@@ -341,9 +349,11 @@ def _generate_body_raw_elements(
 
     return (x_axis_labels, y_axis_labels, pixel_character_matrix)
 
+
 """
 End of uniplot part
 """
+
 
 class TransformerLossConsolePlotter:
     def __init__(self, name: str) -> None:
@@ -366,7 +376,7 @@ class TransformerLossConsolePlotter:
         """
         self._temp_loss.append(loss)
         return
-    
+
     def do_a_plot(self) -> None:
         """
         Move the plot left a bit.
@@ -383,7 +393,8 @@ class TransformerLossConsolePlotter:
             for i in range(21):
                 tqdm.write(_term_move_up() + "\r" + " "*70 + "\r", end="")
             # Plot something to for the debug purpose
-            tqdm.write(colored("ERROR! Divided by zero!", "red", attrs=["blink"]))
+            tqdm.write(colored("ERROR! Divided by zero!",
+                       "red", attrs=["blink"]))
             for i in range(20):
                 tqdm.write("")
             # For whatever the reason, certain dataloader does not produce loss
@@ -392,19 +403,19 @@ class TransformerLossConsolePlotter:
             self._temp_loss = []
             self._x_axis.append(self._x_axis_cnt)
             self._x_axis_cnt += 1
-            
+
             # Pop only if elements are added
-            if self._epoch_cnt >= 2: # So that we could compare two epoch
+            if self._epoch_cnt >= 2:  # So that we could compare two epoch
                 self._loss.pop(0)
                 self._x_axis.pop(0)
 
             # Plot
             to_plot = plot(
                 self._loss,
-                xs = self._x_axis,
-                title = (f"{self.name} trend"),
-                lines = True
-                )
+                xs=self._x_axis,
+                title=(f"{self.name} trend"),
+                lines=True
+            )
             # Remove previous plot
             for i in range(21):
                 tqdm.write(_term_move_up() + "\r" + " "*70 + "\r", end="")
@@ -413,7 +424,7 @@ class TransformerLossConsolePlotter:
             # Count
             self._dataloader_cnt += 1
         return
-    
+
     def signal_new_epoch(self) -> None:
         """
         Modify the x-axis, adding 1
@@ -421,21 +432,21 @@ class TransformerLossConsolePlotter:
         self._epoch_cnt += 1
         self._dataloader_cnt = 0
         return
-    
-    def save_data(self, dir_overwrite: str="") -> None:
+
+    def save_data(self, dir_overwrite: str = "") -> None:
         """
         Save the loss data
         """
         # TODO
         return
-    
+
     def load_data(self) -> None:
         """
         Load the loss data
         """
         # TODO
         return
-    
+
 
 class TransformerTruthAndGuess:
     def __init__(self) -> None:
@@ -445,7 +456,7 @@ class TransformerTruthAndGuess:
         """
         self._ground_truth = []
         self._forecast_guess = []
-        
+
     def append(self, truth: torch.tensor, guess: torch.tensor) -> None:
         """
         Add one batch worth of data to the object
@@ -454,7 +465,7 @@ class TransformerTruthAndGuess:
         # Metadata
         batch_size = truth.shape[0]
         # forecast_length = truth.shape[1]
-        
+
         # Not necessary if only use cpu
         truth = truth.detach().clone().cpu().tolist()
         guess = guess.detach().clone().cpu().tolist()
@@ -462,27 +473,27 @@ class TransformerTruthAndGuess:
         # Init in batch forecast guess
         # if self._forecast_guess == []:
         #     self._forecast_guess = [[] for i in range(forecast_length)]
-        
+
         # Organize data
         for i in range(batch_size):
             self._ground_truth.append(truth[i][0])
             self._forecast_guess.append(guess[i][0])
-            #for j in range(forecast_length):
+            # for j in range(forecast_length):
 
         # Dropping last data
-        ## Ground truth is shorter than the forecast_guess
-        ## Cut the forecast guess to the length of the ground truth
-        #ground_truth_length = len(self._ground_truth)
-        #self._forecast_guess = [i[:ground_truth_length] for i in self._forecast_guess]
+        # Ground truth is shorter than the forecast_guess
+        # Cut the forecast guess to the length of the ground truth
+        # ground_truth_length = len(self._ground_truth)
+        # self._forecast_guess = [i[:ground_truth_length] for i in self._forecast_guess]
         return
-    
+
     def get(self) -> tuple:
         """
         Return the (ground_truth, forecast_guess) data pair when called.
         When no index is passed, default being the last pair
         """
         return self._ground_truth, self._forecast_guess
-    
+
     def __len__(self) -> int:
         """Get the length of the stored data
 
@@ -497,9 +508,10 @@ class TransformerForecastPlotter:
     Logging evaluation process for visualization
     If runtime_plotting is set to false, save_data must be called before calling plot.
     """
-    def __init__(self, 
+
+    def __init__(self,
                  name: str,
-                 working_dir: str, 
+                 working_dir: str,
                  runtime_plotting: bool = True,
                  which_to_plot: Union[None, list] = None,
                  in_one_figure: bool = False,
@@ -518,10 +530,10 @@ class TransformerForecastPlotter:
         # self.runtime_plotting = runtime_plotting
         self.which_to_plot = which_to_plot
         self.isFinished = False
-        self.epoch_cnt = -1 
-            # Epoch counter is only used when the runtime plotting is set to True
-            # Epoch_cnt starts from -1 because when evert a new epoch is called,
-            # it will add 1 first, and starts its end-of-epoch work
+        self.epoch_cnt = -1
+        # Epoch counter is only used when the runtime plotting is set to True
+        # Epoch_cnt starts from -1 because when evert a new epoch is called,
+        # it will add 1 first, and starts its end-of-epoch work
         self.in_one_figure = in_one_figure
         self.plot_interval = plot_interval
         self.format = format
@@ -535,9 +547,9 @@ class TransformerForecastPlotter:
         subdir_name = f"{self.name}_prediction_trend"
         # Update the working directory
         self.working_dir = os.path.join(
-            self.working_dir, 
+            self.working_dir,
             subdir_name
-            )
+        )
         create_folder_if_not_exists(self.working_dir)
 
     def save_data(self, dir_overwrite: str = "") -> None:
@@ -557,10 +569,10 @@ class TransformerForecastPlotter:
             [
                 dataloader_data.get()
                 for dataloader_data in epoch_data
-            ] 
+            ]
             for epoch_data in self._truth_guess_per_epoch
         ]
-        
+
         data_file_path = os.path.join(dir, "truth&guess.json")
         with open(data_file_path, "w", buffering=16384, encoding="utf-8") as f:
             json.dump(unzipped_data, f, indent=2)
@@ -568,7 +580,7 @@ class TransformerForecastPlotter:
         # Set finish flag
         self.isFinished = True
         return
-    
+
     def load_data(self) -> None:
         """
         Load from file
@@ -580,7 +592,7 @@ class TransformerForecastPlotter:
         data_file_path = os.path.join(dir, "truth&guess.json")
         with open(data_file_path, "w", buffering=16384, encoding="utf-8") as f:
             unzipped_data = json.load(f)
-        
+
         # Zipping data into original format
         self._truth_guess_per_epoch = [
             [
@@ -588,13 +600,13 @@ class TransformerForecastPlotter:
                     (dataloader_data[0], dataloader_data[1])
                 )
                 for dataloader_data in epoch_data
-            ] 
+            ]
             for epoch_data in unzipped_data
         ]
         return
-    
-    def append(self, 
-               ground_truth, 
+
+    def append(self,
+               ground_truth,
                forecast_guess
                ) -> None:
         """
@@ -603,9 +615,10 @@ class TransformerForecastPlotter:
         the size of forecast guess is [forecast length, batch size, 1]
         """
         # This append is a custom append of TransformerTruthAndGuess
-        self._truth_guess_per_dataloader[-1].append(ground_truth, forecast_guess)
+        self._truth_guess_per_dataloader[-1].append(
+            ground_truth, forecast_guess)
         return
-    
+
     def signal_new_dataloader(self) -> None:
         """
         Signal a segment for the later plotting,
@@ -614,7 +627,7 @@ class TransformerForecastPlotter:
         if not self.in_one_figure:
             self._truth_guess_per_dataloader.append(TransformerTruthAndGuess())
         return
-    
+
     def signal_new_epoch(self, note: str = "") -> None:
         """
         signal_new_epoch should be called at the end of the epoch, no matter if the runtime plot is set to True or False.
@@ -625,9 +638,10 @@ class TransformerForecastPlotter:
 
         # Organize data
         # Select the data with length greater than 0
-        self._truth_guess_per_dataloader = [truth_and_guess for truth_and_guess in self._truth_guess_per_dataloader if (len(truth_and_guess) > 0)]
+        self._truth_guess_per_dataloader = [
+            truth_and_guess for truth_and_guess in self._truth_guess_per_dataloader if (len(truth_and_guess) > 0)]
         # Remove the last unused TransformerTruthAndGuess
-            
+
         self._truth_guess_per_epoch.append(self._truth_guess_per_dataloader)
         self._truth_guess_per_dataloader = [TransformerTruthAndGuess()]
 
@@ -639,21 +653,21 @@ class TransformerForecastPlotter:
         # Start plotting
         if not self.isFinished:
             self._plot_truth_vs_guess_init(
-                idx = self.epoch_cnt,
-                which_to_plot = self.which_to_plot,
-                in_one_figure = self.in_one_figure,
-                format = self.format,
-                note = note,
+                idx=self.epoch_cnt,
+                which_to_plot=self.which_to_plot,
+                in_one_figure=self.in_one_figure,
+                format=self.format,
+                note=note,
             )
         return
-    
-    def signal_finished(self, note: str="") -> None:
+
+    def signal_finished(self, note: str = "") -> None:
         """signal finished should be called after signal epoch when the training finishes
         """
         self.isFinished = True
         self.signal_new_epoch(note=note)
         return
-        
+
     def _plot_truth_vs_guess_init(self,
                                   idx: int = -1,
                                   which_to_plot: Union[None, list] = None,
@@ -661,33 +675,33 @@ class TransformerForecastPlotter:
                                   in_one_figure: bool = False,
                                   format: str = "png",
                                   note: str = "",
-                                ) -> None:
+                                  ) -> None:
         if not in_one_figure:
             # Create subfolder for each epoch
             # Working dir is now the subfolder
             subdir_name = f"epoch_{idx}"
             working_dir = os.path.join(
-                self.working_dir, 
+                self.working_dir,
                 subdir_name
-                )
+            )
             create_folder_if_not_exists(working_dir)
 
             # Tracking progress
             bar = tqdm(
-                total       = len(self._truth_guess_per_epoch[idx]), 
-                desc        = colored("Plotting", "green", attrs=["blink"]),
-                unit        = "frame",
-                position    = 1,
-                colour      = GREEN,
-                )
+                total=len(self._truth_guess_per_epoch[idx]),
+                desc=colored("Plotting", "green", attrs=["blink"]),
+                unit="frame",
+                position=1,
+                colour=GREEN,
+            )
             # Plotting
             basename = f"{self.name}_prediction_trend"
             for dataloader_truth_and_guess in self._truth_guess_per_epoch[idx]:
                 # Get figure sequence
                 fig_sequence = self._get_plot_sequence(
-                    working_dir, 
+                    working_dir,
                     basename
-                    )
+                )
                 fig_name = f"{basename}_{str(fig_sequence).zfill(3)}"
 
                 # Call the plotting function
@@ -699,7 +713,7 @@ class TransformerForecastPlotter:
                     y_min_max=y_min_max,
                     format=format,
                     note=note,
-                )  
+                )
                 bar.update()
             bar.set_description("Finish plotting")
             bar.colour = BLACK
@@ -718,16 +732,16 @@ class TransformerForecastPlotter:
                 note=note,
             )
         return
-    
+
     def _plot_truth_vs_guess(self,
-                                 figure_name: str,
-                                 working_dir: str,
-                                 truth_and_guess: TransformerTruthAndGuess,
-                                 which_to_plot: Union[None, list] = None,
-                                 y_min_max: Union[None, tuple] = None,
-                                 format: str = "png",
-                                 note: str = ""
-                                 ) -> None:
+                             figure_name: str,
+                             working_dir: str,
+                             truth_and_guess: TransformerTruthAndGuess,
+                             which_to_plot: Union[None, list] = None,
+                             y_min_max: Union[None, tuple] = None,
+                             format: str = "png",
+                             note: str = ""
+                             ) -> None:
         """
         which_to_plot: accept a list that contains the forecast sequence user would like to plot,
             Default: all
@@ -743,28 +757,28 @@ class TransformerForecastPlotter:
         fig, ax = plt.subplots()
 
         # Plot the data
-        default_colors = ['#ff7f0e', 
-                          '#2ca02c', 
-                          '#d62728', 
-                          '#9467bd', 
-                          '#8c564b', 
+        default_colors = ['#ff7f0e',
+                          '#2ca02c',
+                          '#d62728',
+                          '#9467bd',
+                          '#8c564b',
                           '#e377c2',
-                          '#7f7f7f', 
-                          '#bcbd22', 
+                          '#7f7f7f',
+                          '#bcbd22',
                           '#17becf',
                           '#1f77b4',
                           ]
         ax.plot(ground_truth, linewidth=1)
-        ## Draw the line
+        # Draw the line
         if which_to_plot == None:
             which_to_plot = []
             for i in range(len(forecast_guess)):
                 which_to_plot.append(i)
-                
+
         x_axis = [j for j in range(len(forecast_guess))]
         label = "1-unit forecast"
         ax.plot(x_axis, forecast_guess, linewidth=0.7, label=label, alpha=0.3)
-            
+
         # Add labels and title
         ax.set_xlabel('Time')
         ax.set_ylabel('Data')
@@ -795,15 +809,15 @@ class TransformerForecastPlotter:
         # Show the plot
         plt.savefig(
             os.path.join(
-                working_dir, 
+                working_dir,
                 f"{figure_name}.{format}"
-                ), 
-            dpi = 400,
-            format = format)
+            ),
+            dpi=400,
+            format=format)
         plt.clf()
         plt.close()
         return
-    
+
     def _get_plot_sequence(self, working_dir: str, fig_name: str) -> int:
         """
         See if there is already a plot there
@@ -815,16 +829,17 @@ class TransformerForecastPlotter:
 
             # Extract the base name and sequence number from the file name
             parts = base.split('_')
-            
+
             # Extract the sequence number from the last part
             sequence_number = int(parts[-1])
-            
+
             if sequence_number > max_sequence:
                 max_sequence = sequence_number
 
         new_sequence_number = max_sequence + 1
 
         return new_sequence_number
+
 
 """
 
@@ -836,15 +851,16 @@ class TransformerForecastPlotter:
 ╚═╝     ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝╚══════╝
                                             
 """
-        
+
+
 class NotEnoughLayerToAverage(Exception):
-    def __init__(self):            
+    def __init__(self):
         # Call the base class constructor with the parameters it needs
         super().__init__("Not enough layer to average")
 
 
 class SequenceLengthDoesNotMatch(Exception):
-    def __init__(self):            
+    def __init__(self):
         # Call the base class constructor with the parameters it needs
         super().__init__("Sequence length does not match")
 
@@ -853,13 +869,15 @@ class PositionalEncoding(nn.Module):
     """
     Copied from pytorch tutorial
     """
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, batch_first: bool = False, device: str = "cpu"):
+
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 9000, batch_first: bool = False, device: str = "cpu"):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
         self.device = device
         # TODO: Implement batch_first
         position = torch.arange(max_len, device=device).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2, device=device) * (-math.log(10000.0) / d_model))
+        div_term = torch.exp(torch.arange(
+            0, d_model, 2, device=device) * (-math.log(10000.0) / d_model))
         if batch_first:
             pe = torch.zeros(1, max_len, d_model, device=device)
             pe[0, :, 0::2] = torch.sin(position * div_term)
@@ -879,7 +897,7 @@ class PositionalEncoding(nn.Module):
             x: Tensor, shape ``[batch_size, seq_len, embedding_dim]`` if batch_first is True
         """
         raise Exception
-    
+
     def _forward_batch_first(self, x: torch.Tensor) -> torch.Tensor:
         """
         Arguments:
@@ -887,7 +905,7 @@ class PositionalEncoding(nn.Module):
         """
         x = x + self.pe[0, :x.size(1), :]
         return self.dropout(x)
-    
+
     def _forward_not_batch_first(self, x: torch.Tensor) -> torch.Tensor:
         """
         Arguments:
@@ -895,7 +913,70 @@ class PositionalEncoding(nn.Module):
         """
         x = x + self.pe[:x.size(0)]
         return self.dropout(x)
-    
+
+
+class PositionWiseFeedForward(nn.Module):
+    def __init__(self, d_model: int, d_ff: int = 2048):
+        super(PositionWiseFeedForward, self).__init__()
+        self.fc1 = nn.Linear(d_model, d_ff)
+        self.fc2 = nn.Linear(d_ff, d_model)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        return self.fc2(self.relu(self.fc1(x)))
+
+
+class EncoderLayer(nn.Module):
+    def __init__(self, d_model: int, num_heads: int = 4, d_ff: int = 2048, dropout: float = 0.1):
+        super(EncoderLayer, self).__init__()
+        self.self_attn = nn.MultiheadAttention(
+            d_model, num_heads, dropout=0.1, batch_first=True)
+        self.feed_forward = PositionWiseFeedForward(d_model, d_ff)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(
+            self,
+            src: torch.Tensor,
+            mask: Optional[torch.Tensor] = None,
+    ):
+        attn_output = self.self_attn(src, src, src, attn_mask=mask, need_weights=False)
+        src = self.norm1(src + self.dropout(attn_output[0]))
+        ff_output = self.feed_forward(src)
+        src = self.norm2(src + self.dropout(ff_output))
+        return src
+
+
+class DecoderLayer(nn.Module):
+    def __init__(self, d_model: int, num_heads: int = 4, d_ff: int = 2048, dropout: float = 0.1):
+        super(DecoderLayer, self).__init__()
+        self.self_attn = nn.MultiheadAttention(
+            d_model, num_heads, dropout=0.1, batch_first=True)
+        self.cross_attn = nn.MultiheadAttention(
+            d_model, num_heads, dropout=0.1, batch_first=True)
+        self.feed_forward = PositionWiseFeedForward(d_model, d_ff)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(
+            self,
+            tgt: torch.Tensor,
+            context: torch.Tensor,
+            memory_mask: Optional[torch.Tensor] = None,
+            tgt_mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        attn_output = self.self_attn(tgt, tgt, tgt, attn_mask=tgt_mask, need_weights=False)
+        tgt = self.norm1(tgt + self.dropout(attn_output[0]))
+        attn_output = self.cross_attn(
+            tgt, context, context, attn_mask=memory_mask, need_weights=False)
+        tgt = self.norm2(tgt + self.dropout(attn_output[0]))
+        ff_output = self.feed_forward(tgt)
+        tgt = self.norm3(tgt + self.dropout(ff_output))
+        return tgt
+
 
 class WaterFormer(nn.Module):
     def __init__(
@@ -913,7 +994,7 @@ class WaterFormer(nn.Module):
             model_name: str = "WaterFormer",
             hyperparameter_dict: dict = None,
             **kwargs,
-            ) -> None:
+    ) -> None:
         super().__init__(*args, **kwargs)
 
         # Always batch first for easy representation
@@ -942,16 +1023,21 @@ class WaterFormer(nn.Module):
         # Check input integrity
         if average_last_n_decoder_output > decoder_layer_cnt:
             raise NotEnoughLayerToAverage
-        # Take notes of device 
+        # Take notes of device
         self.device = device
         # Take notes of model name
         self.name = model_name
         # Take notes of hyperparameters
         self.hyperparameter = hyperparameter_dict
-        
+
         # Input embedding convert layer
-        ## Semantic extraction
-        self.input_embedding = nn.Linear(
+        # Semantic extraction
+        self.encoder_input_embedding = nn.Linear(
+            in_features=word_spatiotemporal_embedding_size,
+            out_features=word_embedding_size,
+            device=device,
+        )
+        self.decoder_input_embedding = nn.Linear(
             in_features=word_spatiotemporal_embedding_size,
             out_features=word_embedding_size,
             device=device,
@@ -971,65 +1057,61 @@ class WaterFormer(nn.Module):
             device=device,
         )
 
-        # Encoder layers
-        encoder_layer_example = nn.TransformerEncoderLayer(
-            d_model=word_embedding_size,
-            nhead=encoder_layer_head_cnt,
-            batch_first=isBatchFirst,
-            device=device,
-        )
         # Actual encoder
-        self.encoder = nn.TransformerEncoder(
-            encoder_layer=encoder_layer_example,
-            num_layers=encoder_layer_cnt,
-            enable_nested_tensor=False,
-        )
+        self.encoder = nn.ModuleList(
+            [EncoderLayer(
+                word_embedding_size,
+                encoder_layer_head_cnt,
+            ) for _ in range(encoder_layer_cnt)
+            ]
+        ).to(self.device)
 
         # Decoder layers
-        decoder_layer_example = nn.TransformerDecoderLayer(
-            d_model=word_embedding_size,
-            nhead=decoder_layer_head_cnt,
-            batch_first=isBatchFirst,
-            device=device,
-        )
-        self.decoder_1 = nn.TransformerDecoder(
-            decoder_layer=decoder_layer_example,
-            num_layers= decoder_layer_cnt - average_last_n_decoder_output,
-        )
+        self.decoder_1 = nn.ModuleList(
+            [DecoderLayer(
+                word_embedding_size,
+                decoder_layer_head_cnt,
+            ) for _ in range(decoder_layer_cnt - average_last_n_decoder_output)
+            ]
+        ).to(self.device)
 
-        self.decoder_2 = nn.ModuleList([
-            nn.TransformerDecoderLayer(
-                d_model=word_embedding_size,
-                nhead=decoder_layer_head_cnt,
-                batch_first=isBatchFirst,
-                device=device,
-            ) for i in range(average_last_n_decoder_output)
-        ])
+        self.decoder_2 = nn.ModuleList(
+            [DecoderLayer(
+                word_embedding_size,
+                decoder_layer_head_cnt,
+            ) for _ in range(average_last_n_decoder_output)
+            ]
+        ).to(self.device)
 
         # Output dense layer
         # layer_size_after_flatten = word_embedding_size * dict_size
         self.output_dense_layer = nn.Linear(
             in_features=word_embedding_size,
             out_features=dict_size,
+            device=self.device,
         )
 
         self._init_weights()
-        
+
     def _init_weights(self) -> None:
         init_range = 2
-        self.input_embedding.weight.data.uniform_(-init_range, init_range)
+        self.encoder_input_embedding.weight.data.uniform_(
+            -init_range, init_range)
+        self.decoder_input_embedding.weight.data.uniform_(
+            -init_range, init_range)
         self.output_dense_layer.bias.data.zero_()
         self.output_dense_layer.weight.data.uniform_(-init_range, init_range)
-    
+        return
+
     def forward(
-            self, 
-            src: torch.Tensor, 
-            tgt: torch.Tensor, 
-            memory_mask: Optional[torch.Tensor] = None, 
+            self,
+            src: torch.Tensor,
+            tgt: torch.Tensor,
+            memory_mask: Optional[torch.Tensor] = None,
             tgt_mask: Optional[torch.Tensor] = None,
-            ) -> torch.Tensor:
+    ) -> torch.Tensor:
         """Informer style forward
-        
+
         This model will always use batch first tensor format.
 
         Args:
@@ -1038,77 +1120,80 @@ class WaterFormer(nn.Module):
 
         Returns:
             torch.tensor: Output of decoder
-        """            
+        """
         # Embedding converting layer
-        ## Passing though the embedding converting layer, tensor shape would change
-        ## [batch_size, input_sequence_size, spatiotemporal_encoding_size]
-        ## To 
-        ## [batch_size, input_sequence_size, word_embedding_size]
-        ## Semantic extraction
-        context = self.input_embedding(src)
-        target = self.input_embedding(tgt)
+        # Passing though the embedding converting layer, tensor shape would change
+        # [batch_size, input_sequence_size, spatiotemporal_encoding_size]
+        # To
+        # [batch_size, input_sequence_size, word_embedding_size]
+        # Semantic extraction
+        context = self.encoder_input_embedding(src)
+        target = self.decoder_input_embedding(tgt)
 
         # Encoder side
-        ## Passing though the positional encoding, tensor shape would not change
-        ## [batch_size, input_sequence_size, word_embedding_size]
+        # Passing though the positional encoding, tensor shape would not change
+        # [batch_size, input_sequence_size, word_embedding_size]
         context = self.encoder_positional_encoding(context)
-        ## Passing though the encoder, tensor shape would not change
-        ## [batch_size, input_sequence_size, word_embedding_size]
-        context = self.encoder(
-            context,
+        # Passing though the encoder, tensor shape would not change
+        # [batch_size, input_sequence_size, word_embedding_size]
+        for i, layer in enumerate(self.encoder):
+            context = layer(
+                context,
             )
 
         # Decoder side
-        ## Passing though the positional encoding, tensor shape would not change
-        ## [batch_size, input_sequence_size, word_embedding_size]
+        # Passing though the positional encoding, tensor shape would not change
+        # [batch_size, input_sequence_size, word_embedding_size]
         target = self.decoder_positional_encoding(target)
 
-        ## Passing though the decoder, tensor shape would not change
-        ## [batch_size, input_sequence_size, word_embedding_size]
+        # Passing though the decoder, tensor shape would not change
+        # [batch_size, input_sequence_size, word_embedding_size]
         if not (memory_mask is None and tgt_mask is None):
-            target = self.decoder_1(
-                target,
-                context,
-                memory_mask = memory_mask,
-                tgt_mask = tgt_mask,
+            for i, layer in enumerate(self.decoder_1):
+                target = layer(
+                    target,
+                    context,
+                    memory_mask = memory_mask,
+                    tgt_mask = tgt_mask,
                 )
 
             average_bucket = []
             for i, layer in enumerate(self.decoder_2):
                 target = layer(
-                    target, 
+                    target,
                     context,
                     memory_mask = memory_mask,
-                    tgt_mask=tgt_mask,
-                    )
+                    tgt_mask = tgt_mask,
+                )
                 average_bucket.append(target)
         else:
-            target = self.decoder_1(
-                target,
-                context,
+            for i, layer in enumerate(self.decoder_1):
+                target = layer(
+                    target,
+                    context,
                 )
             average_bucket = []
             for i, layer in enumerate(self.decoder_2):
                 target = layer(
-                    target, 
+                    target,
                     context,
-                    )
+                )
                 average_bucket.append(target)
-        
-        ## Passing though the average layer
-        ## stacking result: [average_last_n_decoder_output, batch_size, input_sequence_size, word_embedding_size]
-        ## average result: [batch_size, input_sequence_size, word_embedding_size]
+
+        # Passing though the average layer
+        # stacking result: [average_last_n_decoder_output, batch_size, input_sequence_size, word_embedding_size]
+        # average result: [batch_size, input_sequence_size, word_embedding_size]
         average = torch.stack(average_bucket, dim=0).mean(dim=0)
-        
+
         # Output
-        ## Passing though dense layer
-        ## Shape is changed to
-        ## [batch_size, input_sequence_size, dict_size]
+        # Passing though dense layer
+        # Shape is changed to
+        # [batch_size, input_sequence_size, dict_size]
         result = self.output_dense_layer(average)
 
         # For Cross Entropy calculation
-        ## Shape is changed to 
-        ## [batch_size, dict_size, input_sequence_size]
+        # Shape is changed to
+        # [batch_size, dict_size, input_sequence_size]
         result = torch.permute(result, (0, 2, 1))
         return result
 
@@ -1117,6 +1202,7 @@ class WaterFormer(nn.Module):
         with open(os.path.join(working_dir, "hyperparameter.json"), mode="w", encoding="utf-8") as f:
             json.dump(self.hyperparameter, f, indent=2)
         return
+
 
 """
 
@@ -1127,7 +1213,9 @@ class WaterFormer(nn.Module):
 ██████╔╝██║  ██║   ██║   ██║  ██║███████║███████╗   ██║   
 ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚══════╝╚══════╝   ╚═╝   
                                                           
-"""  
+"""
+
+
 class CosineWarmupScheduler(torch.optim.lr_scheduler._LRScheduler):
 
     def __init__(self, optimizer, warmup, max_iters):
@@ -1144,7 +1232,8 @@ class CosineWarmupScheduler(torch.optim.lr_scheduler._LRScheduler):
         if epoch <= self.warmup:
             lr_factor *= epoch * 1.0 / self.warmup
         return lr_factor
-    
+
+
 def transformer_collate_fn(data):
     """
     src, tgt, tgt_y
@@ -1152,21 +1241,21 @@ def transformer_collate_fn(data):
         [
             [
                 [src
-                
+
                 ],
                 [tgt
-                
+
                 ],
                 [tgt_y
-                
+
                 ]
             ],
             [
                 [src
-                
+
                 ],
                 [...
-                
+
                 ],
                 ...
             ],
@@ -1182,16 +1271,16 @@ def transformer_collate_fn(data):
 
 class WaterFormerDataset(torch.utils.data.Dataset):
     def __init__(
-            self, 
+            self,
             src: np.ndarray,
             tgt: np.ndarray,
             timestamp: Union[list, np.array],
             maximum_knowledge_length: int,
             dict_size: int,
-            *args, 
+            *args,
             device: str = "cpu",
             **kwargs
-            ) -> None:
+    ) -> None:
         """
         The dataset is inspired by (Long-Range Transformers for Dynamic Spatiotemporal Forecasting)[https://arxiv.org/abs/2109.12218]
 
@@ -1226,23 +1315,26 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         ]
         """
         super().__init__(*args, **kwargs)
-        self.src_feature_length = src.shape[1] # Step size when doing __getitem__
-        cprint(f"Source number of features: {self.src_feature_length}", color="green")
+        # Step size when doing __getitem__
+        self.src_feature_length = src.shape[1]
+        cprint(
+            f"Source number of features: {self.src_feature_length}", color="green")
         self.tgt_feature_length = tgt.shape[1]
-        cprint(f"Target number of features: {self.tgt_feature_length}", color="green")
+        cprint(
+            f"Target number of features: {self.tgt_feature_length}", color="green")
         self.knowledge_length = maximum_knowledge_length
 
         # Calculate sequence length
         cprint(f"input sequence size: {maximum_knowledge_length}", "green")
         self.dict_size = dict_size
         self.device = device
-        
+
         self._length = src.shape[0] - self.knowledge_length - 1
         if self._length <= 0:
             raise NotEnoughData
         else:
             cprint(f"The length of the dataset is {self._length}", "green")
-        
+
         # Starting formatting data
         cprint("Convert timestamp", "cyan")
         self.timestamp = self._convert_timestamp(timestamp)
@@ -1258,7 +1350,8 @@ class WaterFormerDataset(torch.utils.data.Dataset):
 
         # Note the spatiotemporal_encoding_size
         self.spatiotemporal_encoding_size = self.src.shape[1]
-        self.end_of_sentence = torch.randn((1, self.spatiotemporal_encoding_size), device=self.device)
+        self.end_of_sentence = torch.randn(
+            (1, self.spatiotemporal_encoding_size), device=self.device)
         self.start_of_sentence = torch.randn((1))
 
     def __len__(self) -> int:
@@ -1268,7 +1361,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             int: Amount of elements in the dataset
         """
         return int(self._length)
-    
+
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get the *index* item in the dataset, the dataset is using sliding windows
 
@@ -1279,11 +1372,15 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             Tuple[torch.tensor, torch.tensor, torch.tensor]: src, tgt, tgt_y in sequence
         """
         index += 1
-        src_offset_index = index * self.src_feature_length + self.knowledge_length * self.src_feature_length
-        tgt_offset_index = index * self.tgt_feature_length + self.knowledge_length * self.tgt_feature_length
-        src = torch.tensor(self.src[src_offset_index - self.knowledge_length * self.src_feature_length: src_offset_index], device=self.device)
+        src_offset_index = index * self.src_feature_length + \
+            self.knowledge_length * self.src_feature_length
+        tgt_offset_index = index * self.tgt_feature_length + \
+            self.knowledge_length * self.tgt_feature_length
+        src = torch.tensor(self.src[src_offset_index - self.knowledge_length *
+                           self.src_feature_length: src_offset_index], device=self.device)
         # src = torch.concat([src, self.end_of_sentence])
-        tgt = torch.tensor(self.tgt[tgt_offset_index - self.knowledge_length * self.tgt_feature_length: tgt_offset_index], device=self.device)
+        tgt = torch.tensor(self.tgt[tgt_offset_index - self.knowledge_length *
+                           self.tgt_feature_length: tgt_offset_index], device=self.device)
         # tgt = torch.concat([tgt, self.end_of_sentence])
         """tgt
         [
@@ -1291,7 +1388,8 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             [encode],
         ]
         """
-        raw_tgt_y = torch.tensor(self.tgt_y[tgt_offset_index - self.knowledge_length * self.tgt_feature_length + 1: tgt_offset_index + 1]).type(torch.LongTensor).to(device=self.device)
+        raw_tgt_y = torch.tensor(self.tgt_y[tgt_offset_index - self.knowledge_length *
+                                 self.tgt_feature_length + 1: tgt_offset_index + 1]).type(torch.LongTensor).to(device=self.device)
         # raw_tgt_y = torch.concat([self.start_of_sentence, raw_tgt_y])
         """tgt_y
         [
@@ -1310,7 +1408,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         ]
         """
         return src, tgt, raw_tgt_y
-    
+
     @staticmethod
     def _convert_timestamp(timestamp: Union[list, np.array]):
         """Convert absolute timestamp to sinusoid timestamp
@@ -1328,9 +1426,10 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         # Convert to desired input
         if isinstance(timestamp, list):
             timestamp: np.array = np.array(timestamp, type=np.timedelta64)
-        
-        int_timestamp = timestamp.copy().astype('datetime64[m]').astype(np.int64)
-        
+
+        int_timestamp = timestamp.copy().astype(
+            'datetime64[m]').astype(np.int64)
+
         # Hour
         hour_length = 60
         sin_hours = np.sin(2 * np.pi * int_timestamp / hour_length)
@@ -1358,18 +1457,24 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         # Get an array of boolean values where True represents months with 31 days
         big_month_length = 60 * 24 * 31
         is_31_days_month = np.isin(months, [1, 3, 5, 7, 8, 10, 12])
-        sin_months[is_31_days_month] = np.sin(2 * np.pi * int_timestamp[is_31_days_month] / big_month_length)
-        cos_months[is_31_days_month] = np.cos(2 * np.pi * int_timestamp[is_31_days_month] / big_month_length)
+        sin_months[is_31_days_month] = np.sin(
+            2 * np.pi * int_timestamp[is_31_days_month] / big_month_length)
+        cos_months[is_31_days_month] = np.cos(
+            2 * np.pi * int_timestamp[is_31_days_month] / big_month_length)
         # Get an array of boolean values where True represents months with 30 days
         small_month_length = 60 * 24 * 30
         is_30_days_month = np.isin(months, [4, 6, 9, 11])
-        sin_months[is_30_days_month] = np.sin(2 * np.pi * int_timestamp[is_30_days_month] / small_month_length)
-        cos_months[is_30_days_month] = np.cos(2 * np.pi * int_timestamp[is_30_days_month] / small_month_length)
+        sin_months[is_30_days_month] = np.sin(
+            2 * np.pi * int_timestamp[is_30_days_month] / small_month_length)
+        cos_months[is_30_days_month] = np.cos(
+            2 * np.pi * int_timestamp[is_30_days_month] / small_month_length)
         # Get an array of boolean values where True represents months being Feb
         tiny_month_length = 60 * 24 * 28
         is_feb = np.isin(months, [2])
-        sin_months[is_feb] = np.sin(2 * np.pi * int_timestamp[is_feb] / tiny_month_length)
-        cos_months[is_feb] = np.cos(2 * np.pi * int_timestamp[is_feb] / tiny_month_length)
+        sin_months[is_feb] = np.sin(
+            2 * np.pi * int_timestamp[is_feb] / tiny_month_length)
+        cos_months[is_feb] = np.cos(
+            2 * np.pi * int_timestamp[is_feb] / tiny_month_length)
 
         cprint("Example timestamp encoding:", "green")
         print(f"Hour:\n{sin_hours[:10]}\n{cos_hours[:10]}")
@@ -1379,12 +1484,13 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         print(f"Year:\n{sin_years[:10]}\n{cos_years[:10]}")
 
         sinusoid_timestamp = np.stack(
-            [sin_hours, cos_hours, sin_days, cos_days, sin_weeks, cos_weeks, sin_months, cos_months, sin_years, cos_years], 
+            [sin_hours, cos_hours, sin_days, cos_days, sin_weeks,
+                cos_weeks, sin_months, cos_months, sin_years, cos_years],
             axis=0,
         )
 
         # Transpose the new array for easy usage
-        ## Change from
+        # Change from
         """
         [
             [sin_hour, sin_hour, ...],
@@ -1393,7 +1499,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             ...
         ]
         """
-        ## Change to
+        # Change to
         """
         [
             [sin_hour, cos_hour, sin_day, cos_day, ...],
@@ -1402,11 +1508,11 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             ...
         ]
         """
-    
+
         sinusoid_timestamp = sinusoid_timestamp.T
 
         return sinusoid_timestamp
-    
+
     @staticmethod
     def _forge_timestamp_with_data(data: np.array, timestamp: np.array) -> np.array:
         record_cnt: int = data.shape[0]
@@ -1420,7 +1526,7 @@ class WaterFormerDataset(torch.utils.data.Dataset):
         data: np.array = data.reshape((-1))
 
         # Create isValid array, adding 1 dimension
-        ## The rational for this is that the model will know the value should not be used.
+        # The rational for this is that the model will know the value should not be used.
         nan_filter = np.isnan(data)
         isValid = np.ones(shape=(data.shape[0]))
         isValid[nan_filter] = 0
@@ -1432,8 +1538,10 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             sin_0, sin_1, sin_2, ..., sin_n, sin_0, ...
         ]
         """
-        sin_positional_variable = np.sin(2 * np.pi * np.arange(feature_cnt) / feature_cnt)
-        cos_positional_variable = np.cos(2 * np.pi * np.arange(feature_cnt) / feature_cnt)
+        sin_positional_variable = np.sin(
+            2 * np.pi * np.arange(feature_cnt) / feature_cnt)
+        cos_positional_variable = np.cos(
+            2 * np.pi * np.arange(feature_cnt) / feature_cnt)
         sin_positional_variable = np.tile(sin_positional_variable, record_cnt)
         cos_positional_variable = np.tile(cos_positional_variable, record_cnt)
 
@@ -1459,7 +1567,8 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             [<cos>]
         ]
         """
-        data = np.stack([data, isValid, sin_positional_variable, cos_positional_variable], axis=0)
+        data = np.stack([data, isValid, sin_positional_variable,
+                        cos_positional_variable], axis=0)
         """
         [
             [data, sin_positional_variable, cos_positional_variable],
@@ -1477,5 +1586,5 @@ class WaterFormerDataset(torch.utils.data.Dataset):
             ...
         ]
         """
-        data = np.concatenate([data, timestamp], axis=1, dtype=np.float32)        
+        data = np.concatenate([data, timestamp], axis=1, dtype=np.float32)
         return data
