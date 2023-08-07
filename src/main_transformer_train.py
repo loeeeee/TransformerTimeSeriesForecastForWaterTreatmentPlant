@@ -116,10 +116,10 @@ HYPERPARAMETER = {
     "tgt_columns":                  TGT_COLUMNS,
     "tgt_y_columns":                TGT_COLUMNS,
     "random_seed":                  42,
-    "encoder_layer_cnt":            2,
-    "decoder_layer_cnt":            2,
-    "average_last_n_decoder_output":1,
-    "word_embedding_size":          64,
+    "encoder_layer_cnt":            4,
+    "decoder_layer_cnt":            4,
+    "average_last_n_decoder_output":2,
+    "word_embedding_size":          128,
     "decoder_layer_head_cnt":       4,
     "encoder_layer_head_cnt":       4,
 }
@@ -341,23 +341,14 @@ def main() -> None:
 
                     # Iterate through dataloaders
                     for batch_cnt, (src, tgt, raw_tgt_y) in enumerate(loader, start=1):
-                        memory_mask = generate_square_subsequent_mask(
-                            dim1=tgt.size(1),
-                            dim2=src.size(1),
-                            device=DEVICE,
-                        )
-                        tgt_mask = generate_square_subsequent_mask(
-                            dim1=tgt.size(1),
-                            dim2=tgt.size(1),
-                            device=DEVICE,
-                        )
+
 
                         # zero the parameter gradients
                         model.zero_grad(set_to_none=True)
                         # Forward
                         with torch.autocast(device_type=DEVICE):
                             # Make forecasts
-                            prediction = model(src, tgt, memory_mask=memory_mask, tgt_mask=tgt_mask)
+                            prediction = model(src, tgt, causal=True)
                             # Compute and backprop loss
                             loss = loss_fn(prediction, raw_tgt_y)
                             prediction = torch.argmax(prediction, dim=1)
@@ -443,18 +434,8 @@ def main() -> None:
                         )
                     with torch.no_grad():
                         for batch_cnt, (src, tgt, raw_tgt_y) in enumerate(loader, start=1):
-                            memory_mask = generate_square_subsequent_mask(
-                                dim1=tgt.size(1),
-                                dim2=src.size(1),
-                                device=DEVICE,
-                            )
-                            tgt_mask = generate_square_subsequent_mask(
-                                dim1=tgt.size(1),
-                                dim2=tgt.size(1),
-                                device=DEVICE,
-                            )
                             with torch.autocast(device_type=DEVICE):
-                                prediction = model(src, tgt, memory_mask=memory_mask, tgt_mask=tgt_mask)
+                                prediction = model(src, tgt, causal=False)
                                 loss = loss_fn(prediction, raw_tgt_y)
                                 prediction = torch.argmax(prediction, dim=1)
                                 for additional_monitor in metrics:

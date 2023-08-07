@@ -916,32 +916,108 @@ class PositionalEncoding(nn.Module):
 
 
 class PositionWiseFeedForward(nn.Module):
-    def __init__(self, d_model: int, d_ff: int = 2048):
+    def __init__(self, d_model: int, d_ff: int = 2048, device: str = "cpu"):
         super(PositionWiseFeedForward, self).__init__()
-        self.fc1 = nn.Linear(d_model, d_ff)
-        self.fc2 = nn.Linear(d_ff, d_model)
+        self.fc1 = nn.Linear(d_model, d_ff, device=device)
+        self.fc2 = nn.Linear(d_ff, d_model, device=device)
         self.relu = nn.ReLU()
 
     def forward(self, x):
         return self.fc2(self.relu(self.fc1(x)))
 
 
+class PackedMultiHeadAttention(nn.Module):
+    def __init__(self, head_cnt: int, *args, dropout: float=0.1, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.head_cnt = head_cnt
+        self.dropout = dropout
+
+    def forward(self, query_key_value: torch.Tensor) -> torch.Tensor:
+        result = flash_attn_qkvpacked_func(query_key_value, )
+        return
+
+
+class UnpackedMultiHeadAttention(nn.Module):
+    def __init__(
+            self,
+            d_model: int, 
+            *args, 
+            dim_heads: int = 128, 
+            num_heads: int = 4,
+            dropout: float = 0.1,
+            device: str = "cpu",
+            **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        # Linear layers
+        self.query_linear = nn.Linear(
+            in_features=d_model,
+            out_features=dim_heads,
+            device=device,
+        )
+        self.key_linear = nn.Linear(
+            in_features=d_model,
+            out_features=dim_heads,
+            device=device,
+        )
+        self.value_linear = nn.Linear(
+            in_features=d_model,
+            out_features=dim_heads,
+            device=device,
+        )
+        self._attn_dropout = dropout
+        self.attn_dropout = 0
+        self.isTraining = None
+        self.num_heads = num_heads
+
+        self.attention_head_dim_linear = nn.Linear(
+            in_features = dim_heads,
+            out_features= d_model,
+            device = device,
+        )
+        self.attention_num_heads_linear = nn.Linear(
+            in_features = num_heads,
+            out_features= 1,
+            device = device,
+        )
+    
+    def forward(
+            self, 
+            query: torch.Tensor, 
+            key: torch.Tensor, 
+            value: torch.Tensor,
+            causal: bool = False,
+            ) -> torch.Tensor:
+        # Linear layer for each input
+        query = self.query_linear(query)
+        query = torch.tile(query.unsqueeze(2), (1, 1, self.num_heads, 1))
+        key = self.key_linear(key)
+        key = torch.tile(key.unsqueeze(2), (1, 1, self.num_heads, 1))
+        value = self.value_linear(value)
+        value = torch.tile(value.unsqueeze(2), (1, 1, self.num_heads, 1))
+    
+        # Attention
+        attention = flash_attn_func(query, key, value, dropout_p=self.attn_dropout, causal=causal)
+        attention = self.attention_head_dim_linear(attention)
+        attention = self.attention_num_heads_linear(torch.permute(attention, (0, 1, 3, 2))).squeeze(-1)
+        return attention
+
 class EncoderLayer(nn.Module):
-    def __init__(self, d_model: int, num_heads: int = 4, d_ff: int = 2048, dropout: float = 0.1):
+    def __init__(self, d_model: int, num_heads: int = 4, d_ff: int = 2048, dropout: float = 0.1, device: str = "cpu"):
         super(EncoderLayer, self).__init__()
-        self.self_attn = nn.MultiheadAttention(
-            d_model, num_heads, dropout=0.1, batch_first=True)
-        self.feed_forward = PositionWiseFeedForward(d_model, d_ff)
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
+        self.self_attn = UnpackedMultiHeadAttention(
+            d_model, num_heads=num_heads, dropout=0.1, device=device)
+        self.feed_forward = PositionWiseFeedForward(d_model, d_ff, device=device)
+        self.norm1 = nn.LayerNorm(d_model, device=device)
+        self.norm2 = nn.LayerNorm(d_model, device=device)
         self.dropout = nn.Dropout(dropout)
 
     def forward(
             self,
             src: torch.Tensor,
-            mask: Optional[torch.Tensor] = None,
+            causal: bool = False,
     ):
-        attn_output = self.self_attn(src, src, src, attn_mask=mask, need_weights=False)
+        attn_output = self.self_attn(src, src, src, causal=causal)
         src = self.norm1(src + self.dropout(attn_output[0]))
         ff_output = self.feed_forward(src)
         src = self.norm2(src + self.dropout(ff_output))
@@ -949,29 +1025,28 @@ class EncoderLayer(nn.Module):
 
 
 class DecoderLayer(nn.Module):
-    def __init__(self, d_model: int, num_heads: int = 4, d_ff: int = 2048, dropout: float = 0.1):
+    def __init__(self, d_model: int, num_heads: int = 4, d_ff: int = 2048, dropout: float = 0.1, device: str = "cpu"):
         super(DecoderLayer, self).__init__()
-        self.self_attn = nn.MultiheadAttention(
-            d_model, num_heads, dropout=0.1, batch_first=True)
-        self.cross_attn = nn.MultiheadAttention(
-            d_model, num_heads, dropout=0.1, batch_first=True)
-        self.feed_forward = PositionWiseFeedForward(d_model, d_ff)
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.norm3 = nn.LayerNorm(d_model)
+        self.self_attn = UnpackedMultiHeadAttention(
+            d_model, num_heads=num_heads, dropout=0.1, device=device)
+        self.cross_attn = UnpackedMultiHeadAttention(
+            d_model, num_heads=num_heads, dropout=0.1, device=device)
+        self.norm1 = nn.LayerNorm(d_model, device=device)
+        self.norm2 = nn.LayerNorm(d_model, device=device)
+        self.norm3 = nn.LayerNorm(d_model, device=device)
         self.dropout = nn.Dropout(dropout)
+        self.feed_forward = PositionWiseFeedForward(d_model, d_ff, device = device)
 
     def forward(
             self,
             tgt: torch.Tensor,
             context: torch.Tensor,
-            memory_mask: Optional[torch.Tensor] = None,
-            tgt_mask: Optional[torch.Tensor] = None
+            causal: bool,
     ) -> torch.Tensor:
-        attn_output = self.self_attn(tgt, tgt, tgt, attn_mask=tgt_mask, need_weights=False)
+        attn_output = self.self_attn(tgt, tgt, tgt, causal=causal)
         tgt = self.norm1(tgt + self.dropout(attn_output[0]))
         attn_output = self.cross_attn(
-            tgt, context, context, attn_mask=memory_mask, need_weights=False)
+            tgt, context, context, causal=causal)
         tgt = self.norm2(tgt + self.dropout(attn_output[0]))
         ff_output = self.feed_forward(tgt)
         tgt = self.norm3(tgt + self.dropout(ff_output))
@@ -1107,8 +1182,7 @@ class WaterFormer(nn.Module):
             self,
             src: torch.Tensor,
             tgt: torch.Tensor,
-            memory_mask: Optional[torch.Tensor] = None,
-            tgt_mask: Optional[torch.Tensor] = None,
+            causal: bool = True
     ) -> torch.Tensor:
         """Informer style forward
 
@@ -1148,37 +1222,20 @@ class WaterFormer(nn.Module):
 
         # Passing though the decoder, tensor shape would not change
         # [batch_size, input_sequence_size, word_embedding_size]
-        if not (memory_mask is None and tgt_mask is None):
-            for i, layer in enumerate(self.decoder_1):
-                target = layer(
-                    target,
-                    context,
-                    memory_mask = memory_mask,
-                    tgt_mask = tgt_mask,
-                )
-
-            average_bucket = []
-            for i, layer in enumerate(self.decoder_2):
-                target = layer(
-                    target,
-                    context,
-                    memory_mask = memory_mask,
-                    tgt_mask = tgt_mask,
-                )
-                average_bucket.append(target)
-        else:
-            for i, layer in enumerate(self.decoder_1):
-                target = layer(
-                    target,
-                    context,
-                )
-            average_bucket = []
-            for i, layer in enumerate(self.decoder_2):
-                target = layer(
-                    target,
-                    context,
-                )
-                average_bucket.append(target)
+        for i, layer in enumerate(self.decoder_1):
+            target = layer(
+                target,
+                context,
+                causal = causal,
+            )
+        average_bucket = []
+        for i, layer in enumerate(self.decoder_2):
+            target = layer(
+                target,
+                context,
+                causal = causal,
+            )
+            average_bucket.append(target)
 
         # Passing though the average layer
         # stacking result: [average_last_n_decoder_output, batch_size, input_sequence_size, word_embedding_size]
