@@ -106,7 +106,7 @@ def load_pump_dictionary() -> dict:
 
 # HYPERPARAMETER
 HYPERPARAMETER = {
-    "knowledge_length":             64,    
+    "knowledge_length":             32,    
     "spatiotemporal_encoding_size": None,  # Generated on the fly
     "batch_size":                   64,    # 32 is pretty small
     "train_val_split_ratio":        0.7,
@@ -116,9 +116,9 @@ HYPERPARAMETER = {
     "tgt_columns":                  TGT_COLUMNS,
     "tgt_y_columns":                TGT_COLUMNS,
     "random_seed":                  42,
-    "encoder_layer_cnt":            4,
-    "decoder_layer_cnt":            4,
-    "average_last_n_decoder_output":2,
+    "encoder_layer_cnt":            8,
+    "decoder_layer_cnt":            8,
+    "average_last_n_decoder_output":4,
     "word_embedding_size":          256,
     "decoder_layer_head_cnt":       8,
     "encoder_layer_head_cnt":       8,
