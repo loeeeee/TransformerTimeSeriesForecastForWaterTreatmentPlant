@@ -265,7 +265,7 @@ def main() -> None:
     metrics.append(mae)
     metrics.append(mse)
     ## Optimizer
-    lr = 0.0000001  # learning rate
+    lr = 1e-7  # learning rate
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer,0.001, epochs=200, steps_per_epoch=len(train_loader))
     t_epoch = TrackerEpoch(200)
@@ -348,7 +348,7 @@ def main() -> None:
                         # Forward
                         with torch.autocast(device_type=DEVICE):
                             # Make forecasts
-                            prediction = model(src, tgt, causal=True)
+                            prediction = model(src, tgt)
                             # Compute and backprop loss
                             loss = loss_fn(prediction, raw_tgt_y)
                             prediction = torch.argmax(prediction, dim=1)
@@ -435,7 +435,7 @@ def main() -> None:
                     with torch.no_grad():
                         for batch_cnt, (src, tgt, raw_tgt_y) in enumerate(loader, start=1):
                             with torch.autocast(device_type=DEVICE):
-                                prediction = model(src, tgt, causal=False)
+                                prediction = model(src, tgt)
                                 loss = loss_fn(prediction, raw_tgt_y)
                                 prediction = torch.argmax(prediction, dim=1)
                                 for additional_monitor in metrics:

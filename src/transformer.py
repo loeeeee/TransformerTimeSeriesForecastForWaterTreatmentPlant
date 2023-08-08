@@ -874,7 +874,6 @@ class PositionalEncoding(nn.Module):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
         self.device = device
-        # TODO: Implement batch_first
         position = torch.arange(max_len, device=device).unsqueeze(1)
         div_term = torch.exp(torch.arange(
             0, d_model, 2, device=device) * (-math.log(10000.0) / d_model))
@@ -986,7 +985,6 @@ class UnpackedMultiHeadAttention(nn.Module):
             query: torch.Tensor, 
             key: torch.Tensor, 
             value: torch.Tensor,
-            causal: bool = False,
             ) -> torch.Tensor:
         # Linear layer for each input
         query = self.query_linear(query)
@@ -997,7 +995,10 @@ class UnpackedMultiHeadAttention(nn.Module):
         value = torch.tile(value.unsqueeze(2), (1, 1, self.num_heads, 1))
     
         # Attention
-        attention = flash_attn_func(query, key, value, dropout_p=self.attn_dropout, causal=causal)
+        if self.training:
+            attention = flash_attn_func(query, key, value, dropout_p=self.attn_dropout, causal=True)
+        else:
+            attention = flash_attn_func(query, key, value, dropout_p=self.attn_dropout, causal=False)
         attention = self.attention_head_dim_linear(attention)
         attention = self.attention_num_heads_linear(torch.permute(attention, (0, 1, 3, 2))).squeeze(-1)
         return attention
@@ -1015,9 +1016,8 @@ class EncoderLayer(nn.Module):
     def forward(
             self,
             src: torch.Tensor,
-            causal: bool = False,
     ):
-        attn_output = self.self_attn(src, src, src, causal=causal)
+        attn_output = self.self_attn(src, src, src)
         src = self.norm1(src + self.dropout(attn_output[0]))
         ff_output = self.feed_forward(src)
         src = self.norm2(src + self.dropout(ff_output))
@@ -1041,12 +1041,11 @@ class DecoderLayer(nn.Module):
             self,
             tgt: torch.Tensor,
             context: torch.Tensor,
-            causal: bool,
     ) -> torch.Tensor:
-        attn_output = self.self_attn(tgt, tgt, tgt, causal=causal)
+        attn_output = self.self_attn(tgt, tgt, tgt)
         tgt = self.norm1(tgt + self.dropout(attn_output[0]))
         attn_output = self.cross_attn(
-            tgt, context, context, causal=causal)
+            tgt, context, context)
         tgt = self.norm2(tgt + self.dropout(attn_output[0]))
         ff_output = self.feed_forward(tgt)
         tgt = self.norm3(tgt + self.dropout(ff_output))
@@ -1160,6 +1159,17 @@ class WaterFormer(nn.Module):
 
         # Output dense layer
         # layer_size_after_flatten = word_embedding_size * dict_size
+        self.output_mean_layer = nn.Linear(
+            in_features=average_last_n_decoder_output,
+            out_features=1,
+            device=self.device,
+        )
+        
+        self.output_ff_layer = PositionWiseFeedForward(
+            d_model=word_embedding_size,
+            device=self.device,
+        )
+
         self.output_dense_layer = nn.Linear(
             in_features=word_embedding_size,
             out_features=dict_size,
@@ -1226,21 +1236,24 @@ class WaterFormer(nn.Module):
             target = layer(
                 target,
                 context,
-                causal = causal,
             )
         average_bucket = []
         for i, layer in enumerate(self.decoder_2):
             target = layer(
                 target,
                 context,
-                causal = causal,
             )
             average_bucket.append(target)
 
         # Passing though the average layer
         # stacking result: [average_last_n_decoder_output, batch_size, input_sequence_size, word_embedding_size]
         # average result: [batch_size, input_sequence_size, word_embedding_size]
-        average = torch.stack(average_bucket, dim=0).mean(dim=0)
+        average = torch.permute(torch.stack(average_bucket, dim=0), (1, 2, 3, 0))
+        average = self.output_mean_layer(average)
+        average = torch.squeeze(average, -1)
+        # Result perfection
+        # Nothing changes
+        result = self.output_ff_layer(average)
 
         # Output
         # Passing though dense layer
