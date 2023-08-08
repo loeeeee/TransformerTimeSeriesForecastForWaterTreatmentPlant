@@ -106,9 +106,9 @@ def load_pump_dictionary() -> dict:
 
 # HYPERPARAMETER
 HYPERPARAMETER = {
-    "knowledge_length":             32,    
+    "knowledge_length":             64,    
     "spatiotemporal_encoding_size": None,  # Generated on the fly
-    "batch_size":                   128,    # 32 is pretty small
+    "batch_size":                   64,    # 32 is pretty small
     "train_val_split_ratio":        0.7,
     "scaled_national_standards":    load_scaled_national_standards(),
     "pump_dictionary":              load_pump_dictionary(),
@@ -119,9 +119,9 @@ HYPERPARAMETER = {
     "encoder_layer_cnt":            4,
     "decoder_layer_cnt":            4,
     "average_last_n_decoder_output":2,
-    "word_embedding_size":          128,
-    "decoder_layer_head_cnt":       4,
-    "encoder_layer_head_cnt":       4,
+    "word_embedding_size":          256,
+    "decoder_layer_head_cnt":       8,
+    "encoder_layer_head_cnt":       8,
 }
 
 INPUT_FEATURE_SIZE = len(HYPERPARAMETER["src_columns"])
@@ -267,9 +267,9 @@ def main() -> None:
     ## Optimizer
     lr = 1e-7  # learning rate
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer,0.001, epochs=200, steps_per_epoch=len(train_loader))
-    t_epoch = TrackerEpoch(200)
-    t_val_loss = TrackerLoss(10, model)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer,0.001, epochs=300, steps_per_epoch=len(train_loader))
+    t_epoch = TrackerEpoch(300)
+    t_val_loss = TrackerLoss(-1, model)
     t_train_loss = TrackerLoss(-1, model)
     print(colored("Training:", "black", "on_green"), "\n")
     

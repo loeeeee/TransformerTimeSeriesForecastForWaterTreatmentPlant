@@ -194,7 +194,8 @@ def save_model(model: nn.Module, root_saving_dir: str, dataloader, device: str="
     args = (example_input[0].to(device=device), example_input[1].to(device=device))
     model.to(device=device)
     model.eval()
-    scripted = torch.jit.trace(model.forward, example_inputs=args, check_trace=False) # HACK
+    with torch.autocast(device_type=device):
+        scripted = torch.jit.trace(model, example_inputs=args, check_trace=False) # HACK
     torch.onnx.export(
         model = scripted,
         args = args,
