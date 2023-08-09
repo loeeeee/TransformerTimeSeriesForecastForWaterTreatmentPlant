@@ -1,30 +1,47 @@
-import os
-import torch
-import shutil
-import settings
+"""
+This transformer code works on the fully normalized input, and multiply the loss by the scaling factors
+"""
+import settings # Get config
 
-import pandas as pd
-import numpy as np
-
-from torch import nn
 from helper import *
-from tqdm import tqdm
-from datetime import datetime
-from termcolor import cprint, colored
-from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
-from transformer import TransformerLossConsolePlotter
-from fnn import FeedForwardNeuralNetwork, FeedForwardNeuralNetworkDataset
+from transformer import WaterFormer, TransformerLossConsolePlotter, WaterFormerDataset, transformer_collate_fn,\
+    generate_square_subsequent_mask, GREEN, BLACK, TransformerForecastPlotter
 
-# Get the current timestamp
-current_time = datetime.now()
-# Format the timestamp as YY-MM-DD-HH-MM
-formatted_time = current_time.strftime("%y-%m-%d-%H-%M")
-MODEL_NAME = f"fnn_{formatted_time}"
+import torch
+from torch import nn
+from torch.utils.tensorboard import SummaryWriter
+
+import numpy as np
+import pandas as pd
+
+from tqdm import tqdm
+from typing import Literal
+from termcolor import colored, cprint
+from datetime import datetime
+
+import os
+import sys
+import json
+import shutil
+import random
+
+INPUT_DATA = sys.argv[1]
+try:
+    MODEL_NAME = sys.argv[2]
+except IndexError:
+    print("No model name specified, using current time stamp")
+    # Get the current timestamp
+    current_time = datetime.now()
+    # Format the timestamp as YY-MM-DD-HH-MM
+    formatted_time = current_time.strftime("%y-%m-%d-%H-%M-%s")
+    MODEL_NAME = f"trans_for_{formatted_time}"
+
 VISUAL_DIR = settings.VISUAL_DIR
 DATA_DIR = settings.DATA_DIR
 MODEL_DIR = settings.MODEL_DIR
 DEVICE = settings.DEVICE
+RAW_DIR = settings.RAW_DIR
+
 # Create working dir
 WORKING_DIR = os.path.join(MODEL_DIR, MODEL_NAME)
 isResumed = create_folder_if_not_exists(WORKING_DIR)
@@ -32,12 +49,11 @@ isResumed = create_folder_if_not_exists(WORKING_DIR)
 CHECKPOINT_PATH = os.path.join(WORKING_DIR, "checkpoint.pt")
 if isResumed:
     INPUT_DATA = os.path.join(WORKING_DIR, "data.csv")
-GREEN = "#00af34"
-BLACK = "#ffffff"
 
+print(colored(f"Read from {INPUT_DATA}", "black", "on_green"))
+print(colored(f"Save all files to {WORKING_DIR}", "black", "on_green"))
+print()
 
-DATA_PATH = os.path.join(DATA_DIR, "processed.csv")
-DATA_SPLIT_RATIO = 0.7
 RAW_COLUMNS = [
     "inlet flow",
     "inlet COD",
@@ -60,20 +76,88 @@ X_COLUMNS = RAW_COLUMNS[:-4]
 Y_COLUMNS = RAW_COLUMNS[-4:]
 
 TGT_COLUMNS = "line 1 pump speed discrete"
-BATCH_SIZE = 1024
-isResumed = False # HACK
 
+# Read scaling factors
+def load_scaled_national_standards() -> dict:
+    """Load scaled national standards from data
+
+    Returns:
+        dict: scaling factors in dict format 
+            result:
+                column: value\n
+                column: value\n
+                column: value
+    """
+    scaled_national_standards_path = os.path.join(
+        DATA_DIR, "scaled_national_standards.json"
+        )
+    with open(scaled_national_standards_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data
+
+# Read pump dictionary
+def load_pump_dictionary() -> dict:
+    dictionary_path = os.path.join(
+        DATA_DIR, "pump_dictionary.json"
+        )
+    with open(dictionary_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data
+
+# HYPERPARAMETER
 HYPERPARAMETER = {
-    "batch_size": BATCH_SIZE,
-    "x_columns": X_COLUMNS,
-    "tgt_columns": TGT_COLUMNS,
-    "data_split_ratio": DATA_SPLIT_RATIO,
-    "dict_size": 100,
+    "knowledge_length":             32,    
+    "spatiotemporal_encoding_size": None,  # Generated on the fly
+    "batch_size":                   64,    # 32 is pretty small
+    "train_val_split_ratio":        0.7,
+    "scaled_national_standards":    load_scaled_national_standards(),
+    "pump_dictionary":              load_pump_dictionary(),
+    "src_columns":                  X_COLUMNS,
+    "tgt_columns":                  TGT_COLUMNS,
+    "tgt_y_columns":                TGT_COLUMNS,
+    "random_seed":                  42,
+    "encoder_layer_cnt":            8,
+    "decoder_layer_cnt":            8,
+    "average_last_n_decoder_output":4,
+    "word_embedding_size":          256,
+    "decoder_layer_head_cnt":       8,
+    "encoder_layer_head_cnt":       8,
 }
 
+INPUT_FEATURE_SIZE = len(HYPERPARAMETER["src_columns"])
+FORECAST_FEATURE_SIZE = len(TGT_COLUMNS)
 
-print(colored(f"Save all files to {WORKING_DIR}", "black", "on_green"))
-print()
+cprint(f"Source columns: {HYPERPARAMETER['src_columns']}", "green")
+cprint(f"Target columns: {HYPERPARAMETER['tgt_columns']}", "green")
+
+# Helper
+
+# Subprocess
+
+def save_data(
+        src: str, 
+        dst: str, 
+        symlinks: bool=False, 
+        ignore: Union[list, None]=None
+        ) -> None:
+    """Copy data to model_dir/data
+
+    Args:
+        src (str): source_dir
+        dst (str): destination_dir
+        symlinks (bool, optional): if copy symbolic link. Defaults to False.
+        ignore (Union[list, None], optional): what to ignore. Defaults to None.
+    """
+    dst = os.path.join(dst, "data")
+    create_folder_if_not_exists(dst)
+    for item in os.listdir(src):
+        s = os.path.join(src, item)
+        d = os.path.join(dst, item)
+        if os.path.isdir(s):
+            shutil.copytree(s, d, symlinks, ignore)
+        else:
+            shutil.copy2(s, d)
+    return
 
 def save_checkpoint(
         model: nn.Module,
@@ -88,56 +172,11 @@ def save_checkpoint(
             }, CHECKPOINT_PATH)
     return None
 
-def load_data(data_path) -> pd.DataFrame:
-    data = pd.read_csv(
-        data_path,
-        low_memory=False,
-        index_col=0,
-        parse_dates=["timestamp"],
-    )
-    data = data.dropna()
-    data = to_numeric_and_downcast_data(data)
-    train_size = int(data.shape[0] * DATA_SPLIT_RATIO)
-    val_size = data.shape[0] - train_size
-    train_data = pd.concat([data[:int(train_size/2)], data[int(train_size/2)+val_size:]])
-    val_data = data[int(train_size/2):int(train_size/2)+val_size]
-    return train_data, val_data
+# Main
 
-def remove_nan(X: np.array, y: np.array) -> np.array:
-    """
-    nan_filter = np.isnan(X)
-    X = X[nan_filter]
-    y = y[nan_filter]
-    nan_filter = np.isnan(y)
-    X = X[nan_filter]
-    y = y[nan_filter]
-    """
-    return X, y
-
-def dataframe_to_loader(dataframe_X: pd.DataFrame, dataframe_y: pd.DataFrame, batch_size: int = 256) -> DataLoader:
-    # Dataset
-    np_X, np_y = remove_nan(dataframe_X.to_numpy(), dataframe_y.to_numpy())
-    tensor_X = torch.tensor(np_X, device=DEVICE)
-    tensor_y = torch.tensor(np_y, device=DEVICE)
-    dataset = FeedForwardNeuralNetworkDataset(tensor_X, tensor_y, device=DEVICE)
-    loader = DataLoader(dataset, batch_size = batch_size, shuffle=True)
-    return loader
-
-def main():
-    train_data, val_data = load_data(DATA_PATH)
-    train_loader = dataframe_to_loader(train_data[X_COLUMNS], train_data[TGT_COLUMNS])
-    val_loader = dataframe_to_loader(val_data[X_COLUMNS], val_data[TGT_COLUMNS])
-    train_data, val_data = load_data(DATA_PATH)
-    model = FeedForwardNeuralNetwork(
-        d_in=len(X_COLUMNS),
-        d_out=HYPERPARAMETER["dict_size"],
-        n_depth=20,
-        device=DEVICE,
-        hyperparameter_dict=HYPERPARAMETER
-    )
-    print(model)
-    print("Init TensorBoard!")
-    writer = SummaryWriter(WORKING_DIR)
+def main() -> None:
+    print(colored(f"Using {DEVICE} for training", "black", "on_green"), "\n")
+    
     if isResumed:
         cprint("--------------------------------", "red", "on_green", attrs=["blink"])
         cprint("Resuming existing model training", "red", "on_green", attrs=["blink"])
@@ -145,6 +184,77 @@ def main():
         print()
         # Read input data from the existing checkpoint
         checkpoint = torch.load(CHECKPOINT_PATH)
+        global HYPERPARAMETER
+        HYPERPARAMETER = checkpoint["hyperparameter"]
+    print(f"Hyperparameter:\n{json.dumps(HYPERPARAMETER, indent=2)}")
+
+    print("Init TensorBoard!")
+    writer = SummaryWriter(WORKING_DIR)
+
+    # Read data and do split
+    data = pd.read_csv(
+        INPUT_DATA,
+        low_memory=False,
+        index_col=0,
+        parse_dates=["timestamp"],
+    )
+    train_size = int(data.shape[0] * HYPERPARAMETER["train_val_split_ratio"])
+    val_size = data.shape[0] - train_size
+
+    def dataframe_to_loader(
+            data: pd.DataFrame,
+            ) -> torch.utils.data.DataLoader:
+        # Downcast data
+        data = to_numeric_and_downcast_data(data.copy())
+        
+        # Make sure data is in ascending order by timestamp
+        data.sort_values(by=["timestamp"], inplace=True)
+        
+        # Split data
+        src = np.array(data[HYPERPARAMETER["src_columns"]].values)
+        tgt = np.array(data[HYPERPARAMETER["tgt_columns"]].values).reshape((-1, 1))
+
+        timestamp = data.reset_index(names="timestamp")["timestamp"].to_numpy(dtype=np.datetime64)
+        
+        dataset = WaterFormerDataset(
+            src,
+            tgt,
+            timestamp,
+            HYPERPARAMETER["knowledge_length"],
+            HYPERPARAMETER["pump_dictionary"]["dict_size"],
+            device=DEVICE,
+        )
+        HYPERPARAMETER["spatiotemporal_encoding_size"] = dataset.spatiotemporal_encoding_size
+
+        loader = torch.utils.data.DataLoader(
+            dataset,
+            HYPERPARAMETER["batch_size"],
+            drop_last=False,
+            collate_fn=transformer_collate_fn,
+        )
+        return loader
+    
+    train_data = pd.concat([data[:int(train_size/2)], data[int(train_size/2)+val_size:]])
+    val_data = data[int(train_size/2):int(train_size/2)+val_size]
+    train_loader = dataframe_to_loader(train_data)
+    val_loader = dataframe_to_loader(val_data)
+    
+    # Model
+    model: WaterFormer = WaterFormer(
+        HYPERPARAMETER["pump_dictionary"]["dict_size"],
+        HYPERPARAMETER["spatiotemporal_encoding_size"],
+        device=DEVICE,
+        encoder_layer_cnt               = HYPERPARAMETER["encoder_layer_cnt"],
+        decoder_layer_cnt               = HYPERPARAMETER["decoder_layer_cnt"],
+        average_last_n_decoder_output   = HYPERPARAMETER["average_last_n_decoder_output"],
+        word_embedding_size             = HYPERPARAMETER["word_embedding_size"],
+        decoder_layer_head_cnt          = HYPERPARAMETER["decoder_layer_head_cnt"],
+        encoder_layer_head_cnt          = HYPERPARAMETER["encoder_layer_head_cnt"],
+        hyperparameter_dict = HYPERPARAMETER,
+    ).to(DEVICE)
+
+    print(colored("Model structure:", "black", "on_green"), "\n")
+    print(model)
     
     # Training
     loss_fn = nn.CrossEntropyLoss()
@@ -155,10 +265,10 @@ def main():
     metrics.append(mae)
     metrics.append(mse)
     ## Optimizer
-    lr = 1e-5  # learning rate
+    lr = 1e-7  # learning rate
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer,0.001, epochs=100, steps_per_epoch=len(train_loader))
-    t_epoch = TrackerEpoch(100)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer,0.001, epochs=300, steps_per_epoch=len(train_loader))
+    t_epoch = TrackerEpoch(300)
     t_val_loss = TrackerLoss(-1, model)
     t_train_loss = TrackerLoss(-1, model)
     print(colored("Training:", "black", "on_green"), "\n")
@@ -174,8 +284,12 @@ def main():
     )
     profiler.start()
     """
+    ## Visualizer
     train_console_plot = TransformerLossConsolePlotter("Train")
     eval_console_plot = TransformerLossConsolePlotter("Eval")
+    train_plotter = TransformerForecastPlotter("train", WORKING_DIR, plot_interval=5)
+    eval_plotter = TransformerForecastPlotter("eval", WORKING_DIR, plot_interval=2)
+
     # Load checkpoint
     if isResumed:
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -195,7 +309,7 @@ def main():
                 tqdm.write(colored("--------------------------------------------", "cyan", attrs=["bold"]))
 
                 def learn(
-                        model: FeedForwardNeuralNetwork, 
+                        model: WaterFormer, 
                         optimizer: torch.optim.Optimizer, 
                         scheduler: torch.optim.lr_scheduler._LRScheduler, 
                         loss_fn: torch.nn.CrossEntropyLoss, 
@@ -226,22 +340,25 @@ def main():
                         additional_loss[str(type(additional_monitor))] = 0
 
                     # Iterate through dataloaders
-                    for batch_cnt, (src, tgt) in enumerate(loader, start=1):
+                    for batch_cnt, (src, tgt, raw_tgt_y) in enumerate(loader, start=1):
+
+
                         # zero the parameter gradients
                         model.zero_grad(set_to_none=True)
                         # Forward
-                        #tgt = tgt.unsqueeze(1)
                         with torch.autocast(device_type=DEVICE):
                             # Make forecasts
-                            prediction = model(src)
+                            prediction = model(src, tgt)
                             # Compute and backprop loss
-                            #print(prediction.size(), tgt.size())
-                            loss = loss_fn(prediction, tgt)
+                            loss = loss_fn(prediction, raw_tgt_y)
                             prediction = torch.argmax(prediction, dim=1)
-                            _correct = (prediction == tgt).sum().item() / BATCH_SIZE
+                            _correct = (prediction == raw_tgt_y).sum().item() /\
+                                 (HYPERPARAMETER["batch_size"] * HYPERPARAMETER["knowledge_length"])
                             for additional_monitor in metrics:
                                     additional_loss[str(type(additional_monitor))] += \
-                                        (additional_monitor(prediction, tgt.to(torch.float)).item()) / BATCH_SIZE
+                                        (additional_monitor(prediction, raw_tgt_y.to(torch.float)).item()) /\
+                                             (HYPERPARAMETER["batch_size"] * HYPERPARAMETER["knowledge_length"])
+
                         # Backward
                         loss.backward()
                         torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
@@ -250,13 +367,15 @@ def main():
                         optimizer.step()
 
                         # CPU
-                        batch_loss = loss.item()
+                        batch_loss = loss.item() / HYPERPARAMETER["knowledge_length"]
                         epoch_train_loss += batch_loss
                         correct += _correct
                         epoch_correct += _correct
 
                         # Plotter
+                        train_plotter.append(raw_tgt_y, prediction)
                         if batch_cnt % writer_loop_size == 0:
+                            train_plotter.signal_new_dataloader()
                             normalized_correct = correct / writer_loop_size * 100
                             correct = 0
                             train_console_plot.append(normalized_correct)
@@ -284,7 +403,7 @@ def main():
                 train_loss = learn(model, optimizer, scheduler, loss_fn, train_loader, metrics, t_epoch.epoch())
 
                 def eval(
-                        model: FeedForwardNeuralNetwork, 
+                        model: WaterFormer, 
                         loss_fn: torch.nn.CrossEntropyLoss, 
                         loader, 
                         metrics: list,
@@ -314,25 +433,28 @@ def main():
                         colour      = GREEN,
                         )
                     with torch.no_grad():
-                        for batch_cnt, (src, tgt) in enumerate(loader, start=1):
+                        for batch_cnt, (src, tgt, raw_tgt_y) in enumerate(loader, start=1):
                             with torch.autocast(device_type=DEVICE):
-                                prediction = model(src)
-                                #print(prediction.size(), tgt.size())
-                                loss = loss_fn(prediction, tgt)
+                                prediction = model(src, tgt)
+                                loss = loss_fn(prediction, raw_tgt_y)
                                 prediction = torch.argmax(prediction, dim=1)
                                 for additional_monitor in metrics:
                                     additional_loss[str(type(additional_monitor))] += \
-                                        additional_monitor(prediction, tgt.to(torch.float)).item() / BATCH_SIZE
-                                _correct = (prediction == tgt).sum().item() / BATCH_SIZE
-                                    
+                                        additional_monitor(prediction, raw_tgt_y.to(torch.float)).item() /\
+                                    (HYPERPARAMETER["batch_size"] * HYPERPARAMETER["knowledge_length"])
+                                _correct = (prediction == raw_tgt_y).sum().item() /\
+                                    (HYPERPARAMETER["batch_size"] * HYPERPARAMETER["knowledge_length"])
+
                             # CPU part
-                            batch_loss = loss.item()
+                            batch_loss = loss.item() / HYPERPARAMETER["knowledge_length"]
                             epoch_val_loss += batch_loss
                             correct += _correct 
                             epoch_correct += _correct 
 
                             # Tensorboard
+                            eval_plotter.append(raw_tgt_y, prediction)
                             if batch_cnt % writer_loop_size == 0:
+                                eval_plotter.signal_new_dataloader()
                                 normalized_correct = correct / writer_loop_size * 100
                                 eval_console_plot.append(normalized_correct)
                                 eval_console_plot.do_a_plot()
@@ -364,7 +486,7 @@ def main():
                     save_checkpoint(
                         model=model,
                         optimizer=optimizer,
-                        hyperparameter=HYPERPARAMETER
+                        hyperparameter=HYPERPARAMETER,
                     )
 
                 #-------------#
@@ -372,6 +494,8 @@ def main():
                 #-------------#
                 train_console_plot.signal_new_epoch()
                 eval_console_plot.signal_new_epoch()
+                train_plotter.signal_new_epoch()
+                eval_plotter.signal_new_epoch()
                 if not t_val_loss.check(val_loss, model):
                     tqdm.write(colored("Validation loss no longer decrease, finish training", "green", "on_red"))
                     break
@@ -387,8 +511,20 @@ def main():
                 break
         epoch_bar.close()
     #profiler.stop()
+    train_plotter.signal_finished()
+    eval_plotter.signal_finished()
 
     writer.close()
+
+    # Save current training state to checkpoint
+    save_checkpoint(
+        model=model,
+        optimizer=optimizer,
+        hyperparameter=HYPERPARAMETER,
+    )
+    
+    print(colored("Done!", "black", "on_green"), "\n")
+    
     # Bring back the best known model
     model = t_val_loss.get_best_model()
     print(colored(f"The best model has the validation loss of {t_val_loss.lowest_loss}", "cyan"))
@@ -427,4 +563,8 @@ def main():
     visualize_loss(t_val_loss, WORKING_DIR, f"{MODEL_NAME}_val")
     visualize_loss(t_train_loss, WORKING_DIR, f"{MODEL_NAME}_train")
 
-main()
+    return
+
+if __name__ == "__main__":
+    main()
+

@@ -1,96 +1,83 @@
+import os
+import json
 import torch
+
 from torch import nn
-from torch.utils.data import DataLoader, Dataset
-
-import pandas as pd
-import numpy as np
-
-from tqdm import tqdm
+from termcolor import cprint
+from torch.utils.data import Dataset
 
 
-class FeedForwardNeuralNetwork(nn.Module):
-    def __init__(self, input_size: int, name: str):
-        super().__init__()
-        self.model_name = name
-        self.linear_relu_stack = nn.Sequential(
-                nn.Linear(input_size, 128),
-                nn.Linear(128, 128),
-                nn.ReLU(),
-                nn.Dropout(p=0.2),
-                nn.Linear(128, 128),
-                nn.ReLU(),
-                nn.Linear(128, 128),
-                nn.ReLU(),
-                nn.Linear(128, 128),
-                nn.ReLU(),
-                nn.Linear(128, 128),
-                nn.ReLU(),
-                nn.Linear(128, 128),
-                nn.ReLU(),
-                nn.Linear(128, 128),
-                nn.ReLU(),
-                nn.Linear(128, 128),
-                nn.ReLU(),
-                nn.BatchNorm1d(128),
-                nn.Linear(128, 1),
-                nn.ReLU()
-            )
+class PositionWiseFeedForward(nn.Module):
+    def __init__(self, d_in: int, d_out: int, d_ff: int = 2048, device: str = "cpu"):
+        super(PositionWiseFeedForward, self).__init__()
+        self.fc1 = nn.Linear(d_in, d_ff, device=device)
+        self.fc2 = nn.Linear(d_ff, d_out, device=device)
+        self.relu = nn.ReLU()
 
     def forward(self, x):
-        return self.linear_relu_stack(x)
-
-    def learn(self, 
-              dataloader: DataLoader, 
-              loss_fn, 
-              optimizer: torch.optim, 
-              device: str
-              ) -> None:
-        size = len(dataloader.dataset)
-        self.train()
-        for batch, (X, y) in enumerate(dataloader):
-            X, y = X.to(device), y.to(device)
-
-            # Compute prediction error
-            pred = self(X)
-            loss = loss_fn(pred, y)
-
-            # Backpropagation
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-
-            if batch % 100 == 0:
-                loss, current = loss.item(), (batch + 1) * len(X)
-                tqdm.write(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+        return self.fc2(self.relu(self.fc1(x)))
     
-    def val(self, 
-            dataloader: DataLoader, 
-            loss_fn, 
-            device: str, 
-            metrics: list
-            ) -> torch.Tensor:
-        size = len(dataloader.dataset)
-        num_batches = len(dataloader)
-        self.eval()
-        test_loss, correct = 0, 0
-        additional_loss = {}
-        for additional_monitor in metrics:
-            additional_loss[str(type(additional_monitor))] = 0
 
-        with torch.no_grad():
-            for X, y in dataloader:
-                X, y = X.to(device), y.to(device)
-                pred = self(X)
-                test_loss += loss_fn(pred, y).item()
-                correct += (pred.argmax(1) == y).type(torch.float).sum().item()
-                for additional_monitor in metrics:
-                    additional_loss[str(type(additional_monitor))] += additional_monitor(pred, y).item()
-        test_loss /= num_batches
-        correct /= size
-        tqdm.write(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} ")
-        for additional_monitor in metrics:
-            name = str(type(additional_monitor))[8:-2].split(".")[-1]
-            loss = additional_loss[str(type(additional_monitor))] / num_batches
-            tqdm.write(f" {name}: {loss:>8f}")
-        tqdm.write("\n")
-        return test_loss
+class FeedForwardNeuralNetwork(nn.Module):
+    def __init__(
+            self,
+            d_in: int,
+            d_out: int,
+            d_ff: int = 2048,
+            n_depth: int = 10,
+            device: str = "cpu",
+            hyperparameter_dict: dict = None,
+            ):
+        super().__init__()
+
+        self.input_layer = nn.Linear(
+            in_features=d_in,
+            out_features=int(d_ff/2),
+            device=device,
+        )
+
+        self.feed_forward_layers = nn.ModuleList(
+            [
+                PositionWiseFeedForward(int(d_ff/2), int(d_ff/2), d_ff=d_ff, device=device)
+                for i in range(n_depth)
+            ]
+        )
+
+        self.output_layer = nn.Linear(
+            in_features=int(d_ff/2),
+            out_features=d_out,
+            device=device,
+        )
+
+        self.hyperparameter = hyperparameter_dict
+
+    def forward(self, X) -> torch.Tensor:
+        X = self.input_layer(X)
+        for layer in self.feed_forward_layers:
+            X = layer(X)
+        result = self.output_layer(X)
+        return result
+    
+    def dump_hyperparameter(self, working_dir: str) -> None:
+        cprint("Dumping hyperparameter to json file", "green")
+        with open(os.path.join(working_dir, "hyperparameter.json"), mode="w", encoding="utf-8") as f:
+            json.dump(self.hyperparameter, f, indent=2)
+        return
+
+class FeedForwardNeuralNetworkDataset(Dataset):
+    def __init__(self, X: torch.Tensor, y: torch.Tensor, transform=None, target_transform=None, device: str = "cpu"):
+        """
+        X is a DataFrame
+        y is a DataFrame
+        """
+        self.X = X
+        self.y = y
+        self.device = device
+
+    def __len__(self) -> int:
+        return len(self.y)
+
+    def __getitem__(self, idx):
+        X = torch.tensor(self.X[idx], device=self.device)
+        y = torch.tensor(self.y[idx]).type(torch.LongTensor).to(self.device)
+        return X, y

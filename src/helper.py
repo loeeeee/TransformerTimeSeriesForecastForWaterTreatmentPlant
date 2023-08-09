@@ -51,7 +51,7 @@ class TrackerEpoch:
 class TrackerLoss:
     def __init__(self, patience: int, model):
         """
-        If the Loss have not improve in continues three epoches,
+        If the Loss have not improve in continues three epochs,
         it signals a stop
         """
         self.loss = []
@@ -187,10 +187,29 @@ def load_data(path, name) -> pd.DataFrame:
 
     return data
 
-def save_model(model: nn.Module, root_saving_dir: str) -> None:
+def save_model(model: nn.Module, root_saving_dir: str, dataloader, device: str="cpu") -> None:
     print(f"Save data to {root_saving_dir}")
-    save_dir = os.path.join(root_saving_dir, model.model_name)
-    torch.save(model.state_dict(), f"{save_dir}.pt")
+    save_dir = os.path.join(root_saving_dir, f"{model.name}.onnx")
+    example_input = next(iter(dataloader))
+    args = (example_input[0].to(device=device), example_input[1].to(device=device))
+    model.to(device=device)
+    model.eval()
+    with torch.autocast(device_type=device):
+        scripted = torch.jit.trace(model, example_inputs=args, check_trace=False) # HACK
+    torch.onnx.export(
+        model = scripted,
+        args = args,
+        f = save_dir,
+        export_params = True,        # store the trained parameter weights inside the model file
+        do_constant_folding = True,  # whether to execute constant folding for optimization
+        input_names = ['encoder', 'decoder'],   # the model's input names
+        output_names = ['forecast'], # the model's output names
+        dynamic_axes = {'encoder' : {0: 'batch_size', 1: 'flatten_encoder_sequence'},    # variable length axes
+                        'decoder' : {0: 'batch_size', 1: 'flatten_decoder_sequence'},
+                        'forecast': {0: 'batch_size', 1: 'output_sequence'}
+                        },
+        opset_version = 18,
+        )
     return
 
 def console_general_data_info(data: pd.DataFrame) -> None:
@@ -205,7 +224,7 @@ def console_general_data_info(data: pd.DataFrame) -> None:
 
 def create_folder_if_not_exists(dir) -> bool:
     """
-    Return bool, indicating if the folder is *newly* created
+    Return bool, indicating if the folder is *newly* created, True means exists
     """
     if not (isExist := os.path.exists(dir)):
         os.mkdir(dir)
