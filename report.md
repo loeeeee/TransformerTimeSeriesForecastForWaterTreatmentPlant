@@ -4,13 +4,35 @@
 
 ## Introduction
 
-The development of water treatment hardware technology stimulates the wide employment of electronic sensors in contemporary municipal waste water treatment plant. The deployment of such sensors contributes to the automation of the waste water treatment plant, 
+The development of water treatment hardware technology stimulates the wide employment of electronic sensors in contemporary municipal waste water treatment plant. The deployment of such sensors contributes to the automation of the waste water treatment plant, utilizing the PID control system. However, 
+
+## Literature review
 
 ## Methodology
 
-## Data analysis
+### Transformer
 
-## Result
+### Feed Forward Neural Network
+
+### Histogram Gradient Boosting Classifier
+
+### K-Nearest Neighbors
+
+### 
+
+### Data cleaning
+
+## Data analysis and Result
+
+### Periodic trend
+
+DFT
+
+### Data distribution
+
+#### Value range
+
+#### Temporal range
 
 ## Discussion
 
