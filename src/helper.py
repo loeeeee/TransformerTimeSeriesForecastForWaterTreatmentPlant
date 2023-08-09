@@ -51,7 +51,7 @@ class TrackerEpoch:
 class TrackerLoss:
     def __init__(self, patience: int, model):
         """
-        If the Loss have not improve in continues three epoches,
+        If the Loss have not improve in continues three epochs,
         it signals a stop
         """
         self.loss = []

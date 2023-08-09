@@ -356,11 +356,14 @@ End of uniplot part
 
 
 class TransformerLossConsolePlotter:
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, isNotebook: bool = False, disabled: bool = False) -> None:
         """
         This class plots the loss trend in console
         This class plots training loss and validation loss at the same time.
         """
+        if isNotebook:
+            from tqdm.notebook import tqdm
+        self._disabled = disabled
         self.name = name
         self._loss = []
         self._dataloader_cnt = 0
@@ -381,6 +384,8 @@ class TransformerLossConsolePlotter:
         """
         Move the plot left a bit.
         """
+        if self._disabled:
+            return
         # Spacing
         if self._dataloader_cnt == 0:
             tqdm.write("\n"*20)
